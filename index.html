@@ -34,6 +34,8 @@
         }
         .drop-zone:hover, .drop-zone.drag-over { border-color: #e94560; background: rgba(233,69,96,0.1); }
         .drop-zone.loaded { border-color: #4ade80; background: rgba(74,222,128,0.1); }
+        .drop-zone.copper-loaded { border-color: #c8922a; background: rgba(200,146,42,0.1); }
+        .copper-filename { font-size: 0.8rem; color: #c8922a; margin-top: 8px; word-break: break-all; }
         .drop-zone-text { font-size: 0.9rem; color: #888; }
         .filename { font-size: 0.8rem; color: #4ade80; margin-top: 8px; word-break: break-all; }
         .input-group { margin-bottom: 10px; }
@@ -116,6 +118,69 @@
         </div>
 
         <hr class="section-divider">
+
+        <!-- Copper Layer (optional) -->
+        <div>
+            <h2>Copper Layer <span style="color:#555;font-size:0.7rem;text-transform:none">(optional)</span></h2>
+            <div class="drop-zone" id="copperDropZone">
+                <div class="drop-zone-text">Drop F_Cu.svg or F_Cu.gbr</div>
+                <div class="copper-filename" id="copperFilename"></div>
+            </div>
+            <input type="file" id="copperFileInput" accept=".svg,.gbr,.ger,.gtl,.gbl,.gts,.gbs">
+            <div class="hint">KiCad: File → Plot → SVG, select F.Cu layer</div>
+            <div class="error" id="copperErrorMsg"></div>
+        </div>
+
+        <!-- Isolation parameters (shown after copper file loads) -->
+        <div id="isolationSection" class="hidden">
+            <h2>Isolation Routing</h2>
+            <div class="input-group">
+                <label>Isolation Width</label>
+                <div class="input-row">
+                    <input type="number" id="isoWidth" value="0.2" step="0.05" min="0.05" max="5">
+                    <span class="unit">mm</span>
+                </div>
+                <div class="hint">Clearance gap from trace edge</div>
+            </div>
+            <div class="input-group">
+                <label>V-bit Tip Diameter</label>
+                <div class="input-row">
+                    <input type="number" id="isoToolDiam" value="0.1" step="0.05" min="0.01" max="2">
+                    <span class="unit">mm</span>
+                </div>
+            </div>
+            <div class="input-group">
+                <label>Copper Cut Depth</label>
+                <div class="input-row">
+                    <input type="number" id="isoDepth" value="-0.05" step="0.01" max="0">
+                    <span class="unit">mm</span>
+                </div>
+                <div class="hint">0.035 mm = 1oz copper thickness</div>
+            </div>
+            <div class="input-group">
+                <label>Isolation Passes</label>
+                <div class="input-row">
+                    <input type="number" id="isoPasses" value="2" step="1" min="1" max="10">
+                    <span class="unit">passes</span>
+                </div>
+            </div>
+            <div class="input-group">
+                <label>Pass Overlap</label>
+                <div class="input-row">
+                    <input type="number" id="isoOverlap" value="50" step="5" min="0" max="90">
+                    <span class="unit">%</span>
+                </div>
+                <div class="hint">Overlap between adjacent passes</div>
+            </div>
+            <div class="input-group">
+                <label>Isolation Feed Rate</label>
+                <div class="input-row">
+                    <input type="number" id="isoFeedRate" value="150" step="10" min="1" max="1000">
+                    <span class="unit">mm/min</span>
+                </div>
+            </div>
+            <hr class="section-divider">
+        </div>
 
         <!-- Milling Parameters (shown after file loads) -->
         <div id="paramsSection" class="hidden">
@@ -206,6 +271,8 @@
             <div class="info-row"><span class="info-label">Height</span><span class="info-value" id="infoHeight">—</span></div>
             <div class="info-row"><span class="info-label">Contours</span><span class="info-value" id="infoContours">—</span></div>
             <div class="info-row"><span class="info-label">Passes</span><span class="info-value" id="infoPasses">—</span></div>
+            <div class="info-row" id="infoTracesRow" style="display:none"><span class="info-label">Traces</span><span class="info-value" id="infoTraces">—</span></div>
+            <div class="info-row" id="infoIsoPathsRow" style="display:none"><span class="info-label">Iso paths</span><span class="info-value" id="infoIsoPaths">—</span></div>
             <hr class="section-divider">
         </div>
 
@@ -233,6 +300,13 @@
     // =========================================================
     // === STATE
     // =========================================================
+
+    // Copper layer state
+    let copperSegments  = [];  // [{x1,y1,x2,y2,r}] — D01 strokes (older Gerber style)
+    let copperFlashes   = [];  // [{x,y,ap:{type,w,h}}] — D03 flashes (older Gerber style)
+    let copperRegions   = [];  // [[{x,y}]] — G36/G37 filled polygon regions (KiCad 6+ style)
+    let copperToolpaths = [];  // [[{x,y}]] — isolation polylines (all passes combined)
+    let copperBounds    = null; // bounding box of copper layer (used when no edge cuts loaded)
 
     let parsedContours = [];   // [{x,y}[]] — all closed contours from Gerber (Y-down coords)
     let outerContour   = null; // Largest contour = board perimeter
@@ -273,6 +347,13 @@
     const infoHeight     = document.getElementById('infoHeight');
     const infoContours   = document.getElementById('infoContours');
     const infoPasses     = document.getElementById('infoPasses');
+    const infoTraces     = document.getElementById('infoTraces');
+    const infoIsoPaths   = document.getElementById('infoIsoPaths');
+    const copperDropZone    = document.getElementById('copperDropZone');
+    const copperFileInput   = document.getElementById('copperFileInput');
+    const copperFilenameEl  = document.getElementById('copperFilename');
+    const copperErrorMsg    = document.getElementById('copperErrorMsg');
+    const isolationSection  = document.getElementById('isolationSection');
     const tabModeBtn     = document.getElementById('tabModeBtn');
     const tabList        = document.getElementById('tabList');
     const tabHint        = document.getElementById('tabHint');
@@ -431,6 +512,169 @@
     }
 
     // =========================================================
+    // === COPPER LAYER PARSER
+    // =========================================================
+
+    // Parse a copper Gerber layer. Returns {segments:[{x1,y1,x2,y2,r}], flashes:[{x,y,ap}]}.
+
+    // Parse an SVG path `d` attribute (M/L/Z absolute commands only).
+    // Returns an array of polygon point arrays [{x,y}[]].
+    function parseSVGPathData(d) {
+        const polys = [];
+        let pts = [];
+        // Normalize: commas and newlines → spaces
+        const tokens = d.replace(/[,\r\n]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+        let lastCmd = 'L';
+        let i = 0;
+        while (i < tokens.length) {
+            const t = tokens[i];
+            if (/^[A-Za-z]$/.test(t)) {
+                lastCmd = t.toUpperCase();
+                i++;
+                if (lastCmd === 'Z') {
+                    if (pts.length >= 3) polys.push(pts);
+                    pts = [];
+                }
+            } else {
+                const x = parseFloat(tokens[i]);
+                const y = parseFloat(tokens[i + 1]);
+                i += 2;
+                if (isNaN(x) || isNaN(y)) continue;
+                if (lastCmd === 'M') {
+                    if (pts.length >= 3) polys.push(pts);
+                    pts = [{ x, y }];
+                    lastCmd = 'L';
+                } else {
+                    pts.push({ x, y });
+                }
+            }
+        }
+        if (pts.length >= 3) polys.push(pts);
+        return polys;
+    }
+
+    // Parse a KiCad copper SVG.
+    // Returns { segments: [], flashes: [], regions: [{x,y}[]] }
+    function parseCopperSVG(content) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(content, 'image/svg+xml');
+        const err = doc.querySelector('parsererror');
+        if (err) throw new Error('SVG parse error: ' + err.textContent.slice(0, 100));
+
+        const regions = [];
+
+        for (const el of doc.querySelectorAll('path')) {
+            const d = el.getAttribute('d');
+            if (d) {
+                for (const poly of parseSVGPathData(d)) {
+                    if (poly.length >= 3) regions.push(poly);
+                }
+            }
+        }
+
+        for (const el of doc.querySelectorAll('circle')) {
+            const cx = parseFloat(el.getAttribute('cx') || 0);
+            const cy = parseFloat(el.getAttribute('cy') || 0);
+            const r  = parseFloat(el.getAttribute('r')  || 0);
+            if (r > 0) regions.push(circlePoints(cx, cy, r, 32));
+        }
+
+        return { segments: [], flashes: [], regions };
+    }
+
+    // Parse a copper Gerber layer.
+    // Handles D01 strokes, D03 flashes (older style) AND G36/G37 region fills (KiCad 6+ style).
+    function parseCopperLayer(content) {
+        let xDec = 6, yDec = 6;
+        const fmtMatch = content.match(/%FSL[AI]X\d(\d)Y\d(\d)\*%/);
+        if (fmtMatch) { xDec = parseInt(fmtMatch[1]); yDec = parseInt(fmtMatch[2]); }
+        const toMM = content.includes('%MOIN*%') ? 25.4 : 1;
+        function toVal(s, dec) { return parseInt(s) / Math.pow(10, dec) * toMM; }
+
+        // Parse aperture definitions
+        const apertures = {};
+        const addPattern = /%ADD(\d+)([CROcro]),?([^*]*)\*%/g;
+        let m;
+        while ((m = addPattern.exec(content)) !== null) {
+            const code = parseInt(m[1]);
+            const type = m[2].toUpperCase();
+            const params = m[3].split('X').map(Number);
+            if (type === 'C') {
+                apertures[code] = { type: 'C', w: params[0] || 0 };
+            } else if (type === 'R' || type === 'O') {
+                apertures[code] = { type, w: params[0] || 0, h: params[1] || params[0] || 0 };
+            }
+        }
+
+        const segments = [], flashes = [], regions = [];
+        let curX = 0, curY = 0;
+        let curAp = null;
+        let inRegion = false;
+        let regionPts = [];
+
+        const stripped = content.replace(/%[^%]*%/g, '');
+        const commands = stripped.split('*').map(s => s.trim()).filter(Boolean);
+
+        for (const cmd of commands) {
+            if (/^G0*4/.test(cmd)) continue;
+            if (/^M0*2$/.test(cmd)) break;
+
+            if (/^G0*36$/.test(cmd)) {
+                inRegion = true;
+                regionPts = [];
+                continue;
+            }
+            if (/^G0*37$/.test(cmd)) {
+                inRegion = false;
+                if (regionPts.length >= 3) regions.push(regionPts);
+                regionPts = [];
+                continue;
+            }
+
+            // Aperture select: Dxx standalone
+            const apSelect = cmd.match(/^D(\d+)$/);
+            if (apSelect) {
+                const code = parseInt(apSelect[1]);
+                if (code >= 10) curAp = apertures[code] || null;
+                continue;
+            }
+
+            const coordMatch = cmd.match(/^(?:G0*[123])?(?:X(-?\d+))?(?:Y(-?\d+))?(?:I(-?\d+))?(?:J(-?\d+))?D0*(\d+)$/);
+            if (!coordMatch) continue;
+
+            const nx = coordMatch[1] !== undefined ? toVal(coordMatch[1], xDec) : curX;
+            const ny = coordMatch[2] !== undefined ? -toVal(coordMatch[2], yDec) : curY;
+            const dCode = parseInt(coordMatch[5]);
+
+            if (dCode >= 10) { curAp = apertures[dCode] || null; continue; }
+
+            if (inRegion) {
+                if (dCode === 2) {
+                    // Pen-up move inside region: flush current sub-polygon, start new one
+                    if (regionPts.length >= 3) regions.push(regionPts);
+                    regionPts = [{ x: nx, y: ny }];
+                } else if (dCode === 1) {
+                    if (!regionPts.length) regionPts.push({ x: curX, y: curY });
+                    regionPts.push({ x: nx, y: ny });
+                }
+            } else {
+                if (dCode === 2) {
+                    // pen up
+                } else if (dCode === 1) {
+                    if (curAp && (Math.abs(nx - curX) > 0.0001 || Math.abs(ny - curY) > 0.0001)) {
+                        segments.push({ x1: curX, y1: curY, x2: nx, y2: ny, r: (curAp.w || 0) / 2 });
+                    }
+                } else if (dCode === 3) {
+                    if (curAp) flashes.push({ x: nx, y: ny, ap: { ...curAp } });
+                }
+            }
+            curX = nx; curY = ny;
+        }
+
+        return { segments, flashes, regions };
+    }
+
+    // =========================================================
     // === GEOMETRY HELPERS
     // =========================================================
 
@@ -487,6 +731,124 @@
             if (y < minY) minY = y; if (y > maxY) maxY = y;
         }
         return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+    }
+
+    // =========================================================
+    // === ISOLATION TOOLPATH GENERATION
+    // =========================================================
+
+    // Generate a stadium (capsule) polygon around a stroke segment at radius d from center.
+    // Returns a closed [{x,y}] polyline.
+    function stadiumBuffer(x1, y1, x2, y2, d) {
+        const dx = x2 - x1, dy = y2 - y1;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        // Degenerate segment → circle
+        if (len < 0.001) {
+            return Array.from({ length: 16 }, (_, i) => ({
+                x: x1 + d * Math.cos(2 * Math.PI * i / 16),
+                y: y1 + d * Math.sin(2 * Math.PI * i / 16)
+            }));
+        }
+        const tx = dx / len, ty = dy / len; // unit tangent
+        const nx = -ty, ny = tx;             // unit left-normal
+        const a0 = Math.atan2(ny, nx);       // angle of the +normal direction
+        const CAP = 8;                        // segments per semicircle
+        const pts = [];
+
+        // End cap at P2: sweep from +normal side to -normal side, going around the far end (+tangent)
+        for (let i = 0; i <= CAP; i++) {
+            const a = a0 - Math.PI * i / CAP;
+            pts.push({ x: x2 + d * Math.cos(a), y: y2 + d * Math.sin(a) });
+        }
+        // Left side back to P1
+        pts.push({ x: x1 - nx * d, y: y1 - ny * d });
+
+        // Start cap at P1: sweep from -normal side to +normal side, going around the near end (-tangent)
+        for (let i = 1; i < CAP; i++) {
+            const a = (a0 + Math.PI) - Math.PI * i / CAP;
+            pts.push({ x: x1 + d * Math.cos(a), y: y1 + d * Math.sin(a) });
+        }
+        // Closing segment (implicit via drawPolyline close): +normal at P1 → +normal at P2 = right side ✓
+        return pts;
+    }
+
+    // Generate a circle polygon at (cx, cy) with radius r.
+    function circlePoints(cx, cy, r, n = 24) {
+        return Array.from({ length: n }, (_, i) => ({
+            x: cx + r * Math.cos(2 * Math.PI * i / n),
+            y: cy + r * Math.sin(2 * Math.PI * i / n)
+        }));
+    }
+
+    // Generate an offset rectangle polygon (optionally with rounded corners for obround).
+    // ap = {type:'R'|'O', w, h}; offset = total outward offset.
+    function flashBuffer(cx, cy, ap, offset) {
+        const hw = ap.w / 2 + offset;
+        const hh = ap.h / 2 + offset;
+        if (ap.type === 'C') {
+            return circlePoints(cx, cy, ap.w / 2 + offset);
+        }
+        if (ap.type === 'O') {
+            // Obround: like a rectangle but with semicircular ends
+            // For simplicity, treat as an ellipse-approximated rectangle with rounded corners
+            const r = Math.min(hw, hh); // corner radius = shorter half
+            const rx = hw - r, ry = hh - r;
+            const N = 8;
+            const corners = [
+                { cx: cx + rx, cy: cy + ry, a0: 0 },
+                { cx: cx - rx, cy: cy + ry, a0: Math.PI / 2 },
+                { cx: cx - rx, cy: cy - ry, a0: Math.PI },
+                { cx: cx + rx, cy: cy - ry, a0: 3 * Math.PI / 2 },
+            ];
+            return corners.flatMap(({ cx: ccx, cy: ccy, a0 }) =>
+                Array.from({ length: N }, (_, i) => ({
+                    x: ccx + r * Math.cos(a0 + Math.PI / 2 * i / (N - 1)),
+                    y: ccy + r * Math.sin(a0 + Math.PI / 2 * i / (N - 1))
+                }))
+            );
+        }
+        // Rectangle: simple 4 corners (slightly larger by offset)
+        return [
+            { x: cx - hw, y: cy - hh }, { x: cx + hw, y: cy - hh },
+            { x: cx + hw, y: cy + hh }, { x: cx - hw, y: cy + hh }
+        ];
+    }
+
+    // Build all isolation toolpaths for the given copper geometry.
+    // Returns [[{x,y}]] — one polyline per copper shape per pass.
+    function buildIsolationToolpaths(segments, flashes, regions) {
+        const toolDiam   = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
+        const isoWidth   = parseFloat(document.getElementById('isoWidth').value) || 0.2;
+        const numPasses  = parseInt(document.getElementById('isoPasses').value) || 2;
+        const overlapPct = parseFloat(document.getElementById('isoOverlap').value) || 50;
+        const overlap    = overlapPct / 100;
+        const stepover   = toolDiam * (1 - overlap);
+
+        const paths = [];
+        for (let p = 0; p < numPasses; p++) {
+            const offset = toolDiam / 2 + isoWidth + p * stepover;
+
+            // Older-style D01 strokes
+            for (const seg of segments) {
+                const d = seg.r + offset;
+                const poly = stadiumBuffer(seg.x1, seg.y1, seg.x2, seg.y2, d);
+                if (poly.length >= 3) paths.push(poly);
+            }
+
+            // Older-style D03 flashes (pads)
+            for (const flash of flashes) {
+                const poly = flashBuffer(flash.x, flash.y, flash.ap, offset);
+                if (poly.length >= 3) paths.push(poly);
+            }
+
+            // Modern G36/G37 region fills — offset each polygon outward
+            for (const region of regions) {
+                if (region.length < 3) continue;
+                const iso = offsetPolygon(region, offset);
+                if (iso.length >= 3) paths.push(iso);
+            }
+        }
+        return paths;
     }
 
     // =========================================================
@@ -588,13 +950,14 @@
     }
 
     function fitView() {
-        if (!boardBounds || !canvas.width) return;
+        const bounds = boardBounds || copperBounds;
+        if (!bounds || !canvas.width) return;
         const PAD = 0.85;
-        const scaleX = (canvas.width  * PAD) / boardBounds.width;
-        const scaleY = (canvas.height * PAD) / boardBounds.height;
+        const scaleX = (canvas.width  * PAD) / bounds.width;
+        const scaleY = (canvas.height * PAD) / bounds.height;
         viewScale = Math.min(scaleX, scaleY);
-        const boardCX = (boardBounds.minX + boardBounds.maxX) / 2;
-        const boardCY = (boardBounds.minY + boardBounds.maxY) / 2;
+        const boardCX = (bounds.minX + bounds.maxX) / 2;
+        const boardCY = (bounds.minY + bounds.maxY) / 2;
         viewOffX = canvas.width  / 2 - boardCX * viewScale;
         viewOffY = canvas.height / 2 - boardCY * viewScale;
     }
@@ -613,18 +976,70 @@
     function drawPreview() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        if (!parsedContours.length) {
+        const hasAnything = parsedContours.length || copperSegments.length || copperFlashes.length || copperRegions.length;
+        if (!hasAnything) {
             ctx.fillStyle = '#333';
             ctx.font = '14px system-ui';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText('Drop a Gerber Edge Cuts file to begin', canvas.width / 2, canvas.height / 2);
+            ctx.fillText('Drop a Gerber file to begin', canvas.width / 2, canvas.height / 2);
             return;
         }
 
         ctx.save();
         ctx.translate(viewOffX, viewOffY);
         ctx.scale(viewScale, viewScale);
+
+        // Isolation toolpaths — drawn as a stroke with the actual tool diameter width
+        // Each path is the tool CENTER path (running to the SIDE of each trace, not through it)
+        if (copperToolpaths.length) {
+            const toolDiam = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
+            ctx.strokeStyle = 'rgba(220, 180, 30, 0.85)';
+            ctx.lineWidth   = toolDiam;  // world-space width = actual cut width
+            ctx.lineCap     = 'round';
+            ctx.lineJoin    = 'round';
+            for (const path of copperToolpaths) {
+                if (path.length < 2) continue;
+                ctx.beginPath();
+                ctx.moveTo(path[0].x, path[0].y);
+                for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
+                ctx.closePath();
+                ctx.stroke();
+            }
+            ctx.lineCap   = 'butt';
+            ctx.lineJoin  = 'miter';
+        }
+
+        // Copper — regions (KiCad 6+ polygon fills), then strokes, then flashes
+        ctx.fillStyle = 'rgba(200,146,42,0.85)';
+        for (const region of copperRegions) {
+            if (region.length < 3) continue;
+            ctx.beginPath();
+            ctx.moveTo(region[0].x, region[0].y);
+            for (let i = 1; i < region.length; i++) ctx.lineTo(region[i].x, region[i].y);
+            ctx.closePath();
+            ctx.fill();
+        }
+        for (const seg of copperSegments) {
+            ctx.beginPath();
+            ctx.moveTo(seg.x1, seg.y1);
+            ctx.lineTo(seg.x2, seg.y2);
+            ctx.strokeStyle = 'rgba(200,146,42,0.85)';
+            ctx.lineWidth = seg.r * 2;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+            ctx.lineCap = 'butt';
+        }
+        for (const flash of copperFlashes) {
+            const poly = flashBuffer(flash.x, flash.y, flash.ap, 0);
+            if (poly.length < 3) continue;
+            ctx.beginPath();
+            ctx.moveTo(poly[0].x, poly[0].y);
+            for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(200,146,42,0.85)';
+            ctx.fill();
+        }
 
         // Board outline (blue)
         for (const contour of parsedContours) {
@@ -697,10 +1112,32 @@
     // Transform from internal Y-down coords to real-world G-code coords.
     // Board bottom-left → (0, 0).
     function toGC(pt) {
+        const bounds = boardBounds || copperBounds;
         return {
-            x: pt.x - boardBounds.minX,
-            y: boardBounds.maxY - pt.y
+            x: pt.x - bounds.minX,
+            y: bounds.maxY - pt.y
         };
+    }
+
+    // Emit G-code lines for all isolation toolpaths.
+    function emitIsolationLines(lines, paths, copperDepth, safeZ, feedRate, plungeRate, f) {
+        if (!paths.length) return;
+        lines.push('');
+        lines.push('; === ISOLATION ROUTING ===');
+        for (let i = 0; i < paths.length; i++) {
+            const path = paths[i];
+            if (path.length < 2) continue;
+            const start = toGC(path[0]);
+            lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
+            lines.push(`G1 Z${f(copperDepth)} F${plungeRate}  ; plunge into copper`);
+            for (let j = 1; j < path.length; j++) {
+                const pt = toGC(path[j]);
+                lines.push(`G1 X${f(pt.x)} Y${f(pt.y)} F${feedRate}`);
+            }
+            const end = toGC(path[path.length - 1]);
+            lines.push(`G1 X${f(start.x)} Y${f(start.y)} F${feedRate}  ; close`);
+            lines.push(`G0 Z${f(safeZ)}  ; retract`);
+        }
     }
 
     // Build the sorted tab intervals (in arc-length space) from the tabs array.
@@ -778,30 +1215,37 @@
     }
 
     function generateGcode() {
-        if (!toolpath || !boardBounds) return '';
+        if (!toolpath && !copperToolpaths.length) return '';
+        const bounds = boardBounds || copperBounds;
+        if (!bounds) return '';
 
-        const cutDepth   = parseFloat(document.getElementById('cutDepth').value);
-        const passDepth  = parseFloat(document.getElementById('passDepth').value);
         const safeZ      = parseFloat(document.getElementById('safeZ').value);
-        const feedRate   = parseInt(document.getElementById('feedRate').value);
         const plungeRate = parseInt(document.getElementById('plungeRate').value);
         const spindleRpm = parseInt(document.getElementById('spindleRpm').value);
-        const tabLayers  = Math.max(1, parseInt(document.getElementById('tabLayers').value) || 1);
-
-        const passes = buildPasses(cutDepth, passDepth);
 
         const f = n => n.toFixed(3);
         const lines = [];
 
         lines.push('; PCBMiller - generated ' + new Date().toISOString());
-        lines.push(`; Board: ${boardBounds.width.toFixed(2)} x ${boardBounds.height.toFixed(2)} mm`);
-        lines.push(`; Cut depth: ${cutDepth} mm  Pass depth: ${passDepth} mm  Passes: ${passes.length}`);
-        lines.push(`; Safe Z: ${safeZ} mm  Feed: ${feedRate} mm/min  Plunge: ${plungeRate} mm/min`);
-        const firstTabbedIdx = Math.max(0, passes.length - tabLayers);
-        const depthBefore    = firstTabbedIdx > 0 ? Math.abs(passes[firstTabbedIdx - 1]) : 0;
-        const tabThicknessMm = (Math.abs(cutDepth) - depthBefore).toFixed(2);
-        lines.push(`; Tabs: ${tabs.length}${tabs.length ? `  Tab thickness: ${tabThicknessMm} mm (${Math.min(tabLayers, passes.length)} pass${tabLayers > 1 ? 'es' : ''})` : ''}`);
+        lines.push(`; Board area: ${bounds.width.toFixed(2)} x ${bounds.height.toFixed(2)} mm`);
+
+        const hasIsolation = copperToolpaths.length > 0;
+        const hasEdgeCuts  = !!toolpath;
+
+        if (hasIsolation) {
+            const isoDepth    = parseFloat(document.getElementById('isoDepth').value);
+            const isoFeedRate = parseInt(document.getElementById('isoFeedRate').value);
+            lines.push(`; Isolation routing: ${copperToolpaths.length} paths, Z${isoDepth} mm at ${isoFeedRate} mm/min`);
+        }
+        if (hasEdgeCuts) {
+            const cutDepth  = parseFloat(document.getElementById('cutDepth').value);
+            const passDepth = parseFloat(document.getElementById('passDepth').value);
+            const feedRate  = parseInt(document.getElementById('feedRate').value);
+            const passes    = buildPasses(cutDepth, passDepth);
+            lines.push(`; Edge cuts: Z${cutDepth} mm  ${passes.length} passes  Feed: ${feedRate} mm/min`);
+        }
         lines.push('');
+
         lines.push('G21        ; mm mode');
         lines.push('G90        ; absolute coordinates');
         lines.push('G17        ; XY plane');
@@ -809,13 +1253,33 @@
         lines.push('');
         lines.push(`G0 Z${f(safeZ)}  ; move to safe height`);
 
-        passes.forEach((passZ, i) => {
-            // Apply tabs to the last tabLayers passes
-            const useTabs = tabs.length > 0 && i >= passes.length - tabLayers;
-            lines.push('');
-            lines.push(`; === Pass ${i + 1}/${passes.length}: Z${f(passZ)}${useTabs ? ' (tabs)' : ''} ===`);
-            emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f);
-        });
+        // Isolation routing first (before edge cuts, while board is still held in place)
+        if (hasIsolation) {
+            const isoDepth    = parseFloat(document.getElementById('isoDepth').value);
+            const isoFeedRate = parseInt(document.getElementById('isoFeedRate').value);
+            emitIsolationLines(lines, copperToolpaths, isoDepth, safeZ, isoFeedRate, plungeRate, f);
+        }
+
+        // Edge cuts
+        if (hasEdgeCuts) {
+            const cutDepth   = parseFloat(document.getElementById('cutDepth').value);
+            const passDepth  = parseFloat(document.getElementById('passDepth').value);
+            const feedRate   = parseInt(document.getElementById('feedRate').value);
+            const tabLayers  = Math.max(1, parseInt(document.getElementById('tabLayers').value) || 1);
+            const passes     = buildPasses(cutDepth, passDepth);
+
+            if (hasIsolation) {
+                lines.push('');
+                lines.push('; === EDGE CUTS ===');
+            }
+
+            passes.forEach((passZ, i) => {
+                const useTabs = tabs.length > 0 && i >= passes.length - tabLayers;
+                lines.push('');
+                lines.push(`; === Pass ${i + 1}/${passes.length}: Z${f(passZ)}${useTabs ? ' (tabs)' : ''} ===`);
+                emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f);
+            });
+        }
 
         lines.push('');
         lines.push('M5   ; spindle off');
@@ -873,6 +1337,74 @@
             }
         };
         reader.readAsText(file);
+    }
+
+    function loadCopperFile(file) {
+        copperErrorMsg.textContent = '';
+        const reader = new FileReader();
+        reader.onload = e => {
+            try {
+                const isSVG = file.name.toLowerCase().endsWith('.svg') ||
+                              e.target.result.trimStart().startsWith('<');
+                const { segments, flashes, regions } = isSVG
+                    ? parseCopperSVG(e.target.result)
+                    : parseCopperLayer(e.target.result);
+                if (!segments.length && !flashes.length && !regions.length) {
+                    copperErrorMsg.textContent = 'No copper found. Is this a copper layer Gerber?';
+                    return;
+                }
+                copperSegments  = segments;
+                copperFlashes   = flashes;
+                copperRegions   = regions;
+                copperToolpaths = buildIsolationToolpaths(segments, flashes, regions);
+
+                // Compute bounding box of all copper geometry
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (const s of segments) {
+                    minX = Math.min(minX, s.x1 - s.r, s.x2 - s.r);
+                    maxX = Math.max(maxX, s.x1 + s.r, s.x2 + s.r);
+                    minY = Math.min(minY, s.y1 - s.r, s.y2 - s.r);
+                    maxY = Math.max(maxY, s.y1 + s.r, s.y2 + s.r);
+                }
+                for (const f of flashes) {
+                    const rw = (f.ap.w || 0) / 2, rh = (f.ap.h || f.ap.w || 0) / 2;
+                    minX = Math.min(minX, f.x - rw); maxX = Math.max(maxX, f.x + rw);
+                    minY = Math.min(minY, f.y - rh); maxY = Math.max(maxY, f.y + rh);
+                }
+                for (const r of regions) {
+                    for (const pt of r) {
+                        minX = Math.min(minX, pt.x); maxX = Math.max(maxX, pt.x);
+                        minY = Math.min(minY, pt.y); maxY = Math.max(maxY, pt.y);
+                    }
+                }
+                copperBounds = { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+
+                copperDropZone.classList.add('copper-loaded');
+                copperFilenameEl.textContent = file.name;
+                show(isolationSection);
+                if (!boardBounds) show(infoSection);
+                generateBtn.disabled = false;
+
+                infoTraces.textContent    = segments.length + flashes.length + regions.length;
+                infoIsoPaths.textContent  = copperToolpaths.length;
+                document.getElementById('infoTracesRow').style.display   = '';
+                document.getElementById('infoIsoPathsRow').style.display = '';
+
+                if (!boardBounds) fitView();
+                drawPreview();
+            } catch (err) {
+                copperErrorMsg.textContent = 'Parse error: ' + err.message;
+                console.error(err);
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    function rebuildIsolation() {
+        if (!copperSegments.length && !copperFlashes.length && !copperRegions.length) return;
+        copperToolpaths = buildIsolationToolpaths(copperSegments, copperFlashes, copperRegions);
+        infoIsoPaths.textContent = copperToolpaths.length;
+        drawPreview();
     }
 
     // =========================================================
@@ -1016,6 +1548,23 @@
         a.click();
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+
+    // Copper layer drop zone
+    copperDropZone.addEventListener('click', () => copperFileInput.click());
+    copperDropZone.addEventListener('dragover', e => { e.preventDefault(); copperDropZone.classList.add('drag-over'); });
+    copperDropZone.addEventListener('dragleave', () => copperDropZone.classList.remove('drag-over'));
+    copperDropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        copperDropZone.classList.remove('drag-over');
+        const file = e.dataTransfer.files[0];
+        if (file) loadCopperFile(file);
+    });
+    copperFileInput.addEventListener('change', e => { if (e.target.files[0]) loadCopperFile(e.target.files[0]); });
+
+    // Isolation parameter changes → rebuild toolpaths
+    ['isoWidth', 'isoToolDiam', 'isoPasses', 'isoOverlap'].forEach(id => {
+        document.getElementById(id).addEventListener('input', rebuildIsolation);
     });
 
     // =========================================================
