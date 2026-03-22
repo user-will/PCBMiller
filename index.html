@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PCBMiller</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: system-ui, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            display: flex;
+        }
+        .sidebar {
+            width: 280px;
+            background: #16213e;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            overflow-y: auto;
+            max-height: 100vh;
+        }
+        h1 { font-size: 1.4rem; color: #e94560; }
+        h2 { font-size: 0.8rem; color: #888; text-transform: uppercase; margin-bottom: 10px; }
+        .drop-zone {
+            border: 2px dashed #444;
+            border-radius: 8px;
+            padding: 20px 16px;
+            text-align: center;
+            cursor: pointer;
+        }
+        .drop-zone:hover, .drop-zone.drag-over { border-color: #e94560; background: rgba(233,69,96,0.1); }
+        .drop-zone.loaded { border-color: #4ade80; background: rgba(74,222,128,0.1); }
+        .drop-zone-text { font-size: 0.9rem; color: #888; }
+        .filename { font-size: 0.8rem; color: #4ade80; margin-top: 8px; word-break: break-all; }
+        .input-group { margin-bottom: 10px; }
+        .input-group label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 4px; }
+        .input-row { display: flex; gap: 8px; align-items: center; }
+        input[type="number"] {
+            flex: 1; padding: 8px; border: 1px solid #333; border-radius: 4px;
+            background: #1a1a2e; color: #eee; font-size: 0.9rem;
+        }
+        input:focus { outline: none; border-color: #e94560; }
+        .unit { font-size: 0.8rem; color: #666; min-width: 30px; }
+        button {
+            width: 100%; padding: 12px; border: none; border-radius: 6px;
+            font-size: 0.9rem; font-weight: 600; cursor: pointer;
+        }
+        .btn-primary { background: #e94560; color: white; }
+        .btn-primary:hover:not(:disabled) { background: #d13652; }
+        .btn-primary:disabled { background: #444; color: #888; cursor: not-allowed; }
+        .btn-secondary {
+            background: #1a1a2e; color: #eee; border: 1px solid #444;
+            padding: 8px; font-size: 0.8rem; font-weight: 500;
+        }
+        .btn-secondary:hover { background: #252545; border-color: #666; }
+        .btn-tab-mode {
+            background: #1a1a2e; color: #eee; border: 1px solid #444;
+            padding: 10px; font-size: 0.85rem; font-weight: 600;
+        }
+        .btn-tab-mode.active { background: rgba(74,222,128,0.15); border-color: #4ade80; color: #4ade80; }
+        .btn-tab-mode:hover { border-color: #4ade80; }
+        .btn-row { display: flex; gap: 8px; }
+        .btn-row button { flex: 1; }
+        .info-row { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 6px; }
+        .info-label { color: #888; }
+        .info-value { color: #eee; }
+        .hint { font-size: 0.75rem; color: #555; margin-top: 4px; }
+        .error { font-size: 0.8rem; color: #e94560; margin-top: 6px; }
+        textarea {
+            width: 100%; height: 160px; background: #1a1a2e; color: #4ade80;
+            border: 1px solid #333; border-radius: 4px; padding: 8px;
+            font-family: monospace; font-size: 0.75rem; resize: vertical;
+        }
+        .preview { flex: 1; position: relative; overflow: hidden; }
+        #preview { width: 100%; height: 100%; display: block; cursor: grab; }
+        #preview.panning { cursor: grabbing; }
+        #preview.tab-mode { cursor: crosshair; }
+        .preview-hint { position: absolute; bottom: 10px; left: 10px; font-size: 0.75rem; color: #444; pointer-events: none; }
+        .tab-hint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+            background: rgba(74,222,128,0.15); border: 1px solid #4ade80; color: #4ade80;
+            padding: 6px 14px; border-radius: 20px; font-size: 0.8rem; pointer-events: none;
+            display: none; }
+        input[type="file"] { display: none; }
+        .hidden { display: none; }
+        .section-divider { border: none; border-top: 1px solid #2a2a4e; }
+        .tab-list { list-style: none; margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+        .tab-item {
+            display: flex; justify-content: space-between; align-items: center;
+            background: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 4px;
+            padding: 5px 8px; font-size: 0.8rem;
+        }
+        .tab-item span { color: #aaa; }
+        .tab-remove { background: none; border: none; color: #e94560; cursor: pointer;
+            font-size: 1rem; padding: 0 4px; width: auto; font-weight: bold; }
+        .tab-remove:hover { color: #ff6b85; }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h1>PCBMiller</h1>
+
+        <!-- File Upload -->
+        <div>
+            <h2>Edge Cuts File</h2>
+            <div class="drop-zone" id="dropZone">
+                <div class="drop-zone-text">Drop .GKO / .gbr / Edge_Cuts</div>
+                <div class="filename" id="filename"></div>
+            </div>
+            <input type="file" id="fileInput" accept=".gbr,.ger,.gko,.gm1,.gm2,.gm3,.gtl,.gbl">
+            <div class="hint">KiCad: Edge_Cuts.gbr or .gko</div>
+            <div class="error" id="errorMsg"></div>
+        </div>
+
+        <hr class="section-divider">
+
+        <!-- Milling Parameters (shown after file loads) -->
+        <div id="paramsSection" class="hidden">
+            <h2>Milling Parameters</h2>
+            <div class="input-group">
+                <label>Tool Diameter</label>
+                <div class="input-row">
+                    <input type="number" id="toolDiam" value="0.8" step="0.1" min="0.1" max="10">
+                    <span class="unit">mm</span>
+                </div>
+            </div>
+            <div class="input-group">
+                <label>Cut Depth (total)</label>
+                <div class="input-row">
+                    <input type="number" id="cutDepth" value="-1.6" step="0.1" max="0">
+                    <span class="unit">mm</span>
+                </div>
+            </div>
+            <div class="input-group">
+                <label>Pass Depth</label>
+                <div class="input-row">
+                    <input type="number" id="passDepth" value="0.5" step="0.1" min="0.05" max="10">
+                    <span class="unit">mm</span>
+                </div>
+                <div class="hint">Depth removed per pass — set equal to Cut Depth for single pass</div>
+            </div>
+            <div class="input-group">
+                <label>Safe Z Height</label>
+                <div class="input-row">
+                    <input type="number" id="safeZ" value="2.0" step="0.5" min="0.5">
+                    <span class="unit">mm</span>
+                </div>
+            </div>
+            <div class="input-group">
+                <label>Feed Rate</label>
+                <div class="input-row">
+                    <input type="number" id="feedRate" value="300" step="10" min="1" max="1000">
+                    <span class="unit">mm/min</span>
+                </div>
+                <div class="hint">Machine max: 1000 mm/min</div>
+            </div>
+            <div class="input-group">
+                <label>Plunge Rate</label>
+                <div class="input-row">
+                    <input type="number" id="plungeRate" value="60" step="10" min="1" max="600">
+                    <span class="unit">mm/min</span>
+                </div>
+                <div class="hint">Machine max: 600 mm/min (Z axis)</div>
+            </div>
+            <div class="input-group">
+                <label>Spindle Speed</label>
+                <div class="input-row">
+                    <input type="number" id="spindleRpm" value="1000" step="50" min="0" max="1000">
+                    <span class="unit">RPM</span>
+                </div>
+                <div class="hint">Machine max: 1000 RPM</div>
+            </div>
+            <hr class="section-divider">
+        </div>
+
+        <!-- Tabs (shown after file loads) -->
+        <div id="tabsSection" class="hidden">
+            <h2>Tabs</h2>
+            <div class="input-group">
+                <label>Tab Width</label>
+                <div class="input-row">
+                    <input type="number" id="tabWidth" value="3.0" step="0.5" min="0.5" max="20">
+                    <span class="unit">mm</span>
+                </div>
+            </div>
+            <div class="input-group">
+                <label>Tab Layers</label>
+                <div class="input-row">
+                    <input type="number" id="tabLayers" value="1" step="1" min="1">
+                    <span class="unit">passes</span>
+                </div>
+                <div class="hint" id="tabThicknessHint">= — mm of material left as tab</div>
+            </div>
+            <button class="btn-tab-mode" id="tabModeBtn">+ Place Tabs on Canvas</button>
+            <ul class="tab-list" id="tabList"></ul>
+            <hr class="section-divider">
+        </div>
+
+        <!-- Board Info (shown after file loads) -->
+        <div id="infoSection" class="hidden">
+            <h2>Board Info</h2>
+            <div class="info-row"><span class="info-label">Width</span><span class="info-value" id="infoWidth">—</span></div>
+            <div class="info-row"><span class="info-label">Height</span><span class="info-value" id="infoHeight">—</span></div>
+            <div class="info-row"><span class="info-label">Contours</span><span class="info-value" id="infoContours">—</span></div>
+            <div class="info-row"><span class="info-label">Passes</span><span class="info-value" id="infoPasses">—</span></div>
+            <hr class="section-divider">
+        </div>
+
+        <button class="btn-primary" id="generateBtn" disabled>Generate G-code</button>
+
+        <!-- G-code Output (shown after generate) -->
+        <div id="gcodeSection" class="hidden">
+            <h2>G-code Output</h2>
+            <textarea id="gcodeOutput" readonly spellcheck="false"></textarea>
+            <div class="btn-row" style="margin-top: 8px;">
+                <button class="btn-secondary" id="copyBtn">Copy</button>
+                <button class="btn-secondary" id="downloadBtn">Download .nc</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="preview">
+        <canvas id="preview"></canvas>
+        <div class="preview-hint" id="previewHint">Scroll to zoom &middot; Drag to pan</div>
+        <div class="tab-hint" id="tabHint">Click on the red toolpath to place a tab &mdash; click the button again to exit</div>
+    </div>
+
+    <script type="module">
+
+    // =========================================================
+    // === STATE
+    // =========================================================
+
+    let parsedContours = [];   // [{x,y}[]] — all closed contours from Gerber (Y-down coords)
+    let outerContour   = null; // Largest contour = board perimeter
+    let boardBounds    = null; // {minX, minY, maxX, maxY, width, height}
+    let toolpath       = null; // [{x,y}] — offset contour the cutter will follow
+    let toolpathLens   = null; // cumulative arc lengths along toolpath (for tab math)
+    let tabs           = [];   // [{t, width}] t = 0..1 normalized arc length
+    let tabModeActive  = false;
+    let gcodeText      = '';
+
+    // Canvas pan/zoom
+    let viewScale = 10;
+    let viewOffX  = 0;
+    let viewOffY  = 0;
+    let isPanning  = false;
+    let panLastX   = 0;
+    let panLastY   = 0;
+
+    // =========================================================
+    // === DOM REFS
+    // =========================================================
+
+    const canvas         = document.getElementById('preview');
+    const ctx            = canvas.getContext('2d');
+    const dropZone       = document.getElementById('dropZone');
+    const fileInput      = document.getElementById('fileInput');
+    const filenameEl     = document.getElementById('filename');
+    const errorMsg       = document.getElementById('errorMsg');
+    const paramsSection  = document.getElementById('paramsSection');
+    const tabsSection    = document.getElementById('tabsSection');
+    const infoSection    = document.getElementById('infoSection');
+    const gcodeSection   = document.getElementById('gcodeSection');
+    const generateBtn    = document.getElementById('generateBtn');
+    const gcodeOutput    = document.getElementById('gcodeOutput');
+    const copyBtn        = document.getElementById('copyBtn');
+    const downloadBtn    = document.getElementById('downloadBtn');
+    const infoWidth      = document.getElementById('infoWidth');
+    const infoHeight     = document.getElementById('infoHeight');
+    const infoContours   = document.getElementById('infoContours');
+    const infoPasses     = document.getElementById('infoPasses');
+    const tabModeBtn     = document.getElementById('tabModeBtn');
+    const tabList        = document.getElementById('tabList');
+    const tabHint        = document.getElementById('tabHint');
+
+    function show(el) { el.classList.remove('hidden'); }
+
+    // Build the array of Z depths for each pass, e.g. [-0.5, -1.0, -1.25] for
+    // cutDepth=-1.25 and passDepth=0.5. The final entry is always exactly cutDepth.
+    function buildPasses(cutDepth, passDepth) {
+        const passes = [];
+        if (passDepth > 0 && passDepth < Math.abs(cutDepth)) {
+            for (let z = -passDepth; z > cutDepth + 0.0001; z -= passDepth) {
+                passes.push(parseFloat(z.toFixed(4)));
+            }
+        }
+        passes.push(cutDepth);
+        return passes;
+    }
+
+    function updatePassCount() {
+        const cutDepth  = parseFloat(document.getElementById('cutDepth').value);
+        const passDepth = parseFloat(document.getElementById('passDepth').value);
+        if (!infoPasses || isNaN(cutDepth) || isNaN(passDepth) || passDepth <= 0) return;
+        const count = buildPasses(cutDepth, passDepth).length;
+        infoPasses.textContent = count + (count === 1 ? ' pass' : ' passes');
+    }
+
+    // =========================================================
+    // === GERBER PARSER (adapted from svg2stencil by Will)
+    // =========================================================
+
+    // Parse edge cuts from a Gerber file (stroke-based, not region-based).
+    // Returns an array of closed contours [{x,y}[]]. Y is inverted (Y-down canvas coords).
+    function parseEdgeCuts(content) {
+        let xDec = 6, yDec = 6;
+        const fmtMatch = content.match(/%FSL[AI]X\d(\d)Y\d(\d)\*%/);
+        if (fmtMatch) { xDec = parseInt(fmtMatch[1]); yDec = parseInt(fmtMatch[2]); }
+        const toMM = content.includes('%MOIN*%') ? 25.4 : 1;
+
+        function toVal(s, dec) { return parseInt(s) / Math.pow(10, dec) * toMM; }
+
+        const segments = [];
+        let curX = 0, curY = 0;
+        let interpMode = 1; // 1=linear, 2=CW arc (G02), 3=CCW arc (G03)
+
+        const stripped = content.replace(/%[^%]*%/g, '');
+        const commands = stripped.split('*').map(s => s.trim()).filter(Boolean);
+
+        for (const cmd of commands) {
+            if (/^G0*4/.test(cmd)) continue;
+            if (/^M0*2$/.test(cmd)) break;
+            if (/^G0*36$/.test(cmd) || /^G0*37$/.test(cmd)) continue; // skip region mode
+            if (/^G0*1$/.test(cmd)) { interpMode = 1; continue; }
+            if (/^G0*2$/.test(cmd)) { interpMode = 2; continue; }
+            if (/^G0*3$/.test(cmd)) { interpMode = 3; continue; }
+
+            const coordMatch = cmd.match(/^(?:G0*([123]))?(?:X(-?\d+))?(?:Y(-?\d+))?(?:I(-?\d+))?(?:J(-?\d+))?D0*(\d+)$/);
+            if (!coordMatch) continue;
+
+            if (coordMatch[1]) interpMode = parseInt(coordMatch[1]);
+            const nx = coordMatch[2] !== undefined ? toVal(coordMatch[2], xDec) : curX;
+            const ny = coordMatch[3] !== undefined ? -toVal(coordMatch[3], yDec) : curY; // Y inverted
+            const dCode = parseInt(coordMatch[6]);
+
+            if (dCode >= 10) continue; // aperture select
+
+            if (dCode === 2) {
+                curX = nx; curY = ny;
+            } else if (dCode === 1) {
+                if (Math.abs(nx - curX) > 0.001 || Math.abs(ny - curY) > 0.001) {
+                    if (interpMode === 1) {
+                        segments.push({ x1: curX, y1: curY, x2: nx, y2: ny });
+                    } else {
+                        const iVal = coordMatch[4] !== undefined ? toVal(coordMatch[4], xDec) : 0;
+                        const jVal = coordMatch[5] !== undefined ? toVal(coordMatch[5], yDec) : 0;
+                        const arcCX = curX + iVal;
+                        const arcCY = curY - jVal;
+                        const r = Math.sqrt((curX - arcCX) ** 2 + (curY - arcCY) ** 2);
+                        if (r > 0.001) {
+                            let startAngle = Math.atan2(curY - arcCY, curX - arcCX);
+                            let endAngle   = Math.atan2(ny  - arcCY, nx  - arcCX);
+                            if (interpMode === 2) { if (endAngle < startAngle) endAngle += 2 * Math.PI; }
+                            else                  { if (endAngle > startAngle) endAngle -= 2 * Math.PI; }
+                            const arcSegs = Math.max(4, Math.ceil(Math.abs(endAngle - startAngle) * r * 4));
+                            let px = curX, py = curY;
+                            for (let i = 1; i <= arcSegs; i++) {
+                                const angle = startAngle + (endAngle - startAngle) * i / arcSegs;
+                                const ax = arcCX + r * Math.cos(angle);
+                                const ay = arcCY + r * Math.sin(angle);
+                                segments.push({ x1: px, y1: py, x2: ax, y2: ay });
+                                px = ax; py = ay;
+                            }
+                        }
+                    }
+                }
+                curX = nx; curY = ny;
+            }
+        }
+
+        return chainSegmentsToContours(segments);
+    }
+
+    // Connect a flat list of line segments into closed contours.
+    function chainSegmentsToContours(segments) {
+        if (!segments.length) return [];
+        const EPS = 0.05;
+        const used = new Set();
+        const contours = [];
+
+        const endMap = new Map();
+        function addEnd(x, y, idx, end) {
+            const k = `${Math.round(x / EPS)}_${Math.round(y / EPS)}`;
+            if (!endMap.has(k)) endMap.set(k, []);
+            endMap.get(k).push({ idx, end });
+        }
+        function getAt(x, y) {
+            const k = `${Math.round(x / EPS)}_${Math.round(y / EPS)}`;
+            return (endMap.get(k) || []).filter(e => !used.has(e.idx));
+        }
+
+        for (let i = 0; i < segments.length; i++) {
+            addEnd(segments[i].x1, segments[i].y1, i, 'start');
+            addEnd(segments[i].x2, segments[i].y2, i, 'end');
+        }
+
+        for (let si = 0; si < segments.length; si++) {
+            if (used.has(si)) continue;
+            used.add(si);
+
+            const startX = segments[si].x1, startY = segments[si].y1;
+            const pts = [{ x: startX, y: startY }];
+            let cx = segments[si].x2, cy = segments[si].y2;
+            pts.push({ x: cx, y: cy });
+
+            let closed = false;
+            for (let iter = 0; iter < segments.length; iter++) {
+                if (Math.abs(cx - startX) < EPS && Math.abs(cy - startY) < EPS) { closed = true; break; }
+                const next = getAt(cx, cy);
+                if (!next.length) break;
+                const { idx, end } = next[0];
+                used.add(idx);
+                const seg = segments[idx];
+                if (end === 'start') { cx = seg.x2; cy = seg.y2; }
+                else                 { cx = seg.x1; cy = seg.y1; }
+                pts.push({ x: cx, y: cy });
+            }
+
+            if (closed) {
+                const last = pts[pts.length - 1];
+                if (Math.abs(last.x - startX) < EPS && Math.abs(last.y - startY) < EPS) pts.pop();
+            }
+            if (closed && pts.length >= 3) contours.push(pts);
+        }
+
+        return contours;
+    }
+
+    // =========================================================
+    // === GEOMETRY HELPERS
+    // =========================================================
+
+    function signedArea(pts) {
+        let sum = 0;
+        for (let i = 0; i < pts.length; i++) {
+            const j = (i + 1) % pts.length;
+            sum += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+        }
+        return sum / 2;
+    }
+
+    // Offset a polygon outward by distance d (vertex-normal bisector method).
+    function offsetPolygon(points, d) {
+        if (Math.abs(d) < 0.0001) return points.map(p => ({ ...p }));
+        let pts = points;
+        if (signedArea(pts) < 0) pts = pts.slice().reverse(); // normalize to CCW
+        const n = pts.length;
+        const result = [];
+        for (let i = 0; i < n; i++) {
+            const prev = pts[(i - 1 + n) % n];
+            const curr = pts[i];
+            const next = pts[(i + 1) % n];
+            const e1x = curr.x - prev.x, e1y = curr.y - prev.y;
+            const l1 = Math.sqrt(e1x * e1x + e1y * e1y);
+            const e2x = next.x - curr.x, e2y = next.y - curr.y;
+            const l2 = Math.sqrt(e2x * e2x + e2y * e2y);
+            if (l1 < 0.0001 || l2 < 0.0001) { result.push({ x: curr.x, y: curr.y }); continue; }
+            const n1x =  e1y / l1, n1y = -e1x / l1;
+            const n2x =  e2y / l2, n2y = -e2x / l2;
+            const bx = n1x + n2x, by = n1y + n2y;
+            const bl = Math.sqrt(bx * bx + by * by);
+            if (bl < 0.0001) { result.push({ x: curr.x + n1x * d, y: curr.y + n1y * d }); continue; }
+            const bux = bx / bl, buy = by / bl;
+            const dot = n1x * bux + n1y * buy;
+            const scale = dot > 0.1 ? d / dot : d * 10;
+            result.push({ x: curr.x + bux * scale, y: curr.y + buy * scale });
+        }
+        return result;
+    }
+
+    // Return the contour with the largest absolute area (= board perimeter).
+    function selectOuterContour(contours) {
+        return contours.reduce((best, c) =>
+            Math.abs(signedArea(c)) > Math.abs(signedArea(best)) ? c : best
+        );
+    }
+
+    // Compute bounding box of a contour.
+    function computeBounds(contour) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const { x, y } of contour) {
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+        return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+    }
+
+    // =========================================================
+    // === TAB HELPERS
+    // =========================================================
+
+    // Build cumulative arc-length array for a closed polyline.
+    // lengths[i] = total distance from pts[0] to pts[i].
+    function computeArcLengths(pts) {
+        const lengths = [0];
+        for (let i = 1; i < pts.length; i++) {
+            const dx = pts[i].x - pts[i - 1].x;
+            const dy = pts[i].y - pts[i - 1].y;
+            lengths.push(lengths[i - 1] + Math.sqrt(dx * dx + dy * dy));
+        }
+        // Include the closing segment back to pts[0]
+        const dx = pts[0].x - pts[pts.length - 1].x;
+        const dy = pts[0].y - pts[pts.length - 1].y;
+        lengths.push(lengths[lengths.length - 1] + Math.sqrt(dx * dx + dy * dy));
+        return lengths;
+    }
+
+    // Interpolate a point at a given arc length along the (closed) toolpath.
+    function pointAtLength(len) {
+        const total = toolpathLens[toolpathLens.length - 1];
+        len = ((len % total) + total) % total;
+        const n = toolpath.length;
+        for (let i = 0; i < n; i++) {
+            const a = toolpathLens[i], b = toolpathLens[i + 1];
+            if (len >= a && len <= b) {
+                const t = (b - a) < 0.0001 ? 0 : (len - a) / (b - a);
+                const p0 = toolpath[i];
+                const p1 = toolpath[(i + 1) % n];
+                return { x: p0.x + t * (p1.x - p0.x), y: p0.y + t * (p1.y - p0.y) };
+            }
+        }
+        return { ...toolpath[0] };
+    }
+
+    // Find the nearest point on the toolpath to world coords (wx, wy).
+    // Returns normalized arc-length t ∈ [0, 1).
+    function nearestTabT(wx, wy) {
+        const n = toolpath.length;
+        const total = toolpathLens[toolpathLens.length - 1];
+        let bestDist = Infinity, bestLen = 0;
+
+        for (let i = 0; i < n; i++) {
+            const p0 = toolpath[i];
+            const p1 = toolpath[(i + 1) % n];
+            const segLen = toolpathLens[i + 1] - toolpathLens[i];
+            const dx = p1.x - p0.x, dy = p1.y - p0.y;
+            const len2 = dx * dx + dy * dy;
+            let frac = 0;
+            if (len2 > 0.0001) {
+                frac = ((wx - p0.x) * dx + (wy - p0.y) * dy) / len2;
+                frac = Math.max(0, Math.min(1, frac));
+            }
+            const cx = p0.x + frac * dx, cy = p0.y + frac * dy;
+            const dist = (wx - cx) ** 2 + (wy - cy) ** 2;
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestLen = toolpathLens[i] + frac * segLen;
+            }
+        }
+        return bestLen / total;
+    }
+
+    // Convert canvas pixel coords to world (internal) coords.
+    function canvasToWorld(cx, cy) {
+        return { x: (cx - viewOffX) / viewScale, y: (cy - viewOffY) / viewScale };
+    }
+
+    // Render tab list in the sidebar.
+    function renderTabList() {
+        tabList.innerHTML = '';
+        tabs.forEach((tab, idx) => {
+            const li = document.createElement('li');
+            li.className = 'tab-item';
+            li.innerHTML = `<span>Tab ${idx + 1} &mdash; ${tab.width.toFixed(1)} mm</span>`;
+            const btn = document.createElement('button');
+            btn.className = 'tab-remove';
+            btn.textContent = '×';
+            btn.title = 'Remove tab';
+            btn.addEventListener('click', () => { tabs.splice(idx, 1); renderTabList(); drawPreview(); });
+            li.appendChild(btn);
+            tabList.appendChild(li);
+        });
+    }
+
+    // =========================================================
+    // === CANVAS RENDERER
+    // =========================================================
+
+    function resizeCanvas() {
+        const rect = canvas.parentElement.getBoundingClientRect();
+        canvas.width  = rect.width;
+        canvas.height = rect.height;
+        drawPreview();
+    }
+
+    function fitView() {
+        if (!boardBounds || !canvas.width) return;
+        const PAD = 0.85;
+        const scaleX = (canvas.width  * PAD) / boardBounds.width;
+        const scaleY = (canvas.height * PAD) / boardBounds.height;
+        viewScale = Math.min(scaleX, scaleY);
+        const boardCX = (boardBounds.minX + boardBounds.maxX) / 2;
+        const boardCY = (boardBounds.minY + boardBounds.maxY) / 2;
+        viewOffX = canvas.width  / 2 - boardCX * viewScale;
+        viewOffY = canvas.height / 2 - boardCY * viewScale;
+    }
+
+    function drawPolyline(pts, color, lineWidthPx, close = true) {
+        if (!pts || pts.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        if (close) ctx.closePath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidthPx / viewScale;
+        ctx.stroke();
+    }
+
+    function drawPreview() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (!parsedContours.length) {
+            ctx.fillStyle = '#333';
+            ctx.font = '14px system-ui';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('Drop a Gerber Edge Cuts file to begin', canvas.width / 2, canvas.height / 2);
+            return;
+        }
+
+        ctx.save();
+        ctx.translate(viewOffX, viewOffY);
+        ctx.scale(viewScale, viewScale);
+
+        // Board outline (blue)
+        for (const contour of parsedContours) {
+            drawPolyline(contour, '#4a90d9', 1);
+        }
+
+        // Toolpath (red — offset from board edge by tool radius)
+        if (toolpath) {
+            drawPolyline(toolpath, '#e94560', 2);
+        }
+
+        // Tabs (green tick marks perpendicular to the toolpath)
+        if (toolpath && tabs.length) {
+            const total = toolpathLens[toolpathLens.length - 1];
+            for (const tab of tabs) {
+                const halfW = tab.width / 2;
+                const cLen = tab.t * total;
+                const pt = pointAtLength(cLen);
+
+                // Tangent direction at tab center
+                const ahead = pointAtLength(cLen + 0.5);
+                const behind = pointAtLength(cLen - 0.5);
+                const tx = ahead.x - behind.x, ty = ahead.y - behind.y;
+                const tl = Math.sqrt(tx * tx + ty * ty);
+                const tnx = tl > 0.001 ? tx / tl : 1;
+                const tny = tl > 0.001 ? ty / tl : 0;
+
+                // Start/end of tab along the toolpath
+                const s = pointAtLength(cLen - halfW);
+                const e = pointAtLength(cLen + halfW);
+
+                // Draw a green bar over the tab region
+                ctx.beginPath();
+                ctx.moveTo(s.x, s.y);
+                ctx.lineTo(e.x, e.y);
+                ctx.strokeStyle = '#4ade80';
+                ctx.lineWidth = 4 / viewScale;
+                ctx.stroke();
+
+                // Draw perpendicular tick at center
+                const tickSize = 2;
+                ctx.beginPath();
+                ctx.moveTo(pt.x - tny * tickSize, pt.y + tnx * tickSize);
+                ctx.lineTo(pt.x + tny * tickSize, pt.y - tnx * tickSize);
+                ctx.strokeStyle = '#4ade80';
+                ctx.lineWidth = 1.5 / viewScale;
+                ctx.stroke();
+            }
+        }
+
+        ctx.restore();
+
+        // Board dimensions overlay (fixed position)
+        if (boardBounds) {
+            ctx.fillStyle = '#555';
+            ctx.font = '12px monospace';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(
+                `${boardBounds.width.toFixed(2)} × ${boardBounds.height.toFixed(2)} mm`,
+                12, canvas.height - 30
+            );
+        }
+    }
+
+    // =========================================================
+    // === GCODE GENERATOR
+    // =========================================================
+
+    // Transform from internal Y-down coords to real-world G-code coords.
+    // Board bottom-left → (0, 0).
+    function toGC(pt) {
+        return {
+            x: pt.x - boardBounds.minX,
+            y: boardBounds.maxY - pt.y
+        };
+    }
+
+    // Build the sorted tab intervals (in arc-length space) from the tabs array.
+    function buildTabIntervals() {
+        const total = toolpathLens[toolpathLens.length - 1];
+        return tabs.map(tab => {
+            const center = tab.t * total;
+            return { s: center - tab.width / 2, e: center + tab.width / 2 };
+        }).sort((a, b) => a.s - b.s);
+    }
+
+    // Find a start arc-length that is not inside any tab interval.
+    function findClearStartLen(intervals) {
+        let startLen = 0;
+        for (const iv of intervals) {
+            if (startLen >= iv.s && startLen <= iv.e) startLen = iv.e;
+        }
+        return startLen;
+    }
+
+    // Emit G-code lines for one full pass around the contour at depth passZ.
+    // useTabs = true only on passes where we actually want gaps (typically the final pass).
+    function emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f) {
+        const total = toolpathLens[toolpathLens.length - 1];
+
+        if (!useTabs || !tabs.length) {
+            // Simple closed loop
+            const start = toGC(toolpath[0]);
+            lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
+            lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
+            for (let i = 1; i < toolpath.length; i++) {
+                const pt = toGC(toolpath[i]);
+                lines.push(`G1 X${f(pt.x)} Y${f(pt.y)} F${feedRate}`);
+            }
+            lines.push(`G1 X${f(start.x)} Y${f(start.y)} F${feedRate}  ; close`);
+        } else {
+            const intervals = buildTabIntervals();
+            const startLen  = findClearStartLen(intervals);
+            const startPt   = toGC(pointAtLength(startLen));
+            const STEP = 0.3; // mm resolution for detecting tab entry/exit
+
+            lines.push(`G0 X${f(startPt.x)} Y${f(startPt.y)}`);
+            lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
+
+            let cutting = true;
+            let walked = 0;
+
+            while (walked < total) {
+                const step = Math.min(STEP, total - walked);
+                walked += step;
+                const len = ((startLen + walked) % total + total) % total;
+                const pt  = toGC(pointAtLength(len));
+
+                // Is this arc-length inside any tab?
+                const absLen = (startLen + walked) % total;
+                const inTab = intervals.some(iv => absLen >= iv.s && absLen <= iv.e);
+
+                if (inTab && cutting) {
+                    lines.push(`G0 Z${f(safeZ)}  ; lift over tab`);
+                    lines.push(`G0 X${f(pt.x)} Y${f(pt.y)}`);
+                    cutting = false;
+                } else if (!inTab && !cutting) {
+                    lines.push(`G0 X${f(pt.x)} Y${f(pt.y)}`);
+                    lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge after tab`);
+                    cutting = true;
+                } else if (cutting) {
+                    lines.push(`G1 X${f(pt.x)} Y${f(pt.y)} F${feedRate}`);
+                } else {
+                    lines.push(`G0 X${f(pt.x)} Y${f(pt.y)}`);
+                }
+            }
+        }
+
+        lines.push(`G0 Z${f(safeZ)}  ; retract`);
+    }
+
+    function generateGcode() {
+        if (!toolpath || !boardBounds) return '';
+
+        const cutDepth   = parseFloat(document.getElementById('cutDepth').value);
+        const passDepth  = parseFloat(document.getElementById('passDepth').value);
+        const safeZ      = parseFloat(document.getElementById('safeZ').value);
+        const feedRate   = parseInt(document.getElementById('feedRate').value);
+        const plungeRate = parseInt(document.getElementById('plungeRate').value);
+        const spindleRpm = parseInt(document.getElementById('spindleRpm').value);
+        const tabLayers  = Math.max(1, parseInt(document.getElementById('tabLayers').value) || 1);
+
+        const passes = buildPasses(cutDepth, passDepth);
+
+        const f = n => n.toFixed(3);
+        const lines = [];
+
+        lines.push('; PCBMiller - generated ' + new Date().toISOString());
+        lines.push(`; Board: ${boardBounds.width.toFixed(2)} x ${boardBounds.height.toFixed(2)} mm`);
+        lines.push(`; Cut depth: ${cutDepth} mm  Pass depth: ${passDepth} mm  Passes: ${passes.length}`);
+        lines.push(`; Safe Z: ${safeZ} mm  Feed: ${feedRate} mm/min  Plunge: ${plungeRate} mm/min`);
+        const firstTabbedIdx = Math.max(0, passes.length - tabLayers);
+        const depthBefore    = firstTabbedIdx > 0 ? Math.abs(passes[firstTabbedIdx - 1]) : 0;
+        const tabThicknessMm = (Math.abs(cutDepth) - depthBefore).toFixed(2);
+        lines.push(`; Tabs: ${tabs.length}${tabs.length ? `  Tab thickness: ${tabThicknessMm} mm (${Math.min(tabLayers, passes.length)} pass${tabLayers > 1 ? 'es' : ''})` : ''}`);
+        lines.push('');
+        lines.push('G21        ; mm mode');
+        lines.push('G90        ; absolute coordinates');
+        lines.push('G17        ; XY plane');
+        lines.push(`M3 S${spindleRpm}  ; spindle on`);
+        lines.push('');
+        lines.push(`G0 Z${f(safeZ)}  ; move to safe height`);
+
+        passes.forEach((passZ, i) => {
+            // Apply tabs to the last tabLayers passes
+            const useTabs = tabs.length > 0 && i >= passes.length - tabLayers;
+            lines.push('');
+            lines.push(`; === Pass ${i + 1}/${passes.length}: Z${f(passZ)}${useTabs ? ' (tabs)' : ''} ===`);
+            emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f);
+        });
+
+        lines.push('');
+        lines.push('M5   ; spindle off');
+        lines.push('M30  ; end of program');
+
+        return lines.join('\n');
+    }
+
+    // =========================================================
+    // === FILE LOADING
+    // =========================================================
+
+    function loadFile(file) {
+        errorMsg.textContent = '';
+        const reader = new FileReader();
+        reader.onload = e => {
+            try {
+                const contours = parseEdgeCuts(e.target.result);
+
+                if (!contours.length) {
+                    errorMsg.textContent = 'No closed contours found. Is this an Edge Cuts Gerber?';
+                    return;
+                }
+
+                parsedContours = contours;
+                outerContour   = selectOuterContour(contours);
+                boardBounds    = computeBounds(outerContour);
+                tabs           = [];
+
+                const toolDiam = parseFloat(document.getElementById('toolDiam').value);
+                toolpath     = offsetPolygon(outerContour, toolDiam / 2);
+                toolpathLens = computeArcLengths(toolpath);
+
+                // Reveal sidebar sections
+                dropZone.classList.add('loaded');
+                filenameEl.textContent = file.name;
+                show(paramsSection);
+                show(tabsSection);
+                show(infoSection);
+                generateBtn.disabled = false;
+
+                infoWidth.textContent    = boardBounds.width.toFixed(2) + ' mm';
+                infoHeight.textContent   = boardBounds.height.toFixed(2) + ' mm';
+                infoContours.textContent = contours.length;
+                updatePassCount();
+                updateTabHint();
+
+                renderTabList();
+                fitView();
+                drawPreview();
+
+            } catch (err) {
+                errorMsg.textContent = 'Parse error: ' + err.message;
+                console.error(err);
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    // =========================================================
+    // === CANVAS INTERACTION (pan + zoom + tab placement)
+    // =========================================================
+
+    function initCanvasInteraction() {
+        // Zoom with scroll wheel
+        canvas.addEventListener('wheel', e => {
+            e.preventDefault();
+            const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+            viewOffX = mx - (mx - viewOffX) * factor;
+            viewOffY = my - (my - viewOffY) * factor;
+            viewScale = Math.max(0.5, Math.min(viewScale * factor, 500));
+            drawPreview();
+        }, { passive: false });
+
+        // Click — place tab if in tab mode, otherwise start pan
+        canvas.addEventListener('mousedown', e => {
+            if (e.button !== 0) return;
+
+            if (tabModeActive && toolpath) {
+                const rect = canvas.getBoundingClientRect();
+                const { x, y } = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
+                const t = nearestTabT(x, y);
+                const width = parseFloat(document.getElementById('tabWidth').value) || 3.0;
+                tabs.push({ t, width });
+                renderTabList();
+                drawPreview();
+                return;
+            }
+
+            isPanning = true;
+            panLastX = e.clientX;
+            panLastY = e.clientY;
+            canvas.classList.add('panning');
+        });
+
+        window.addEventListener('mousemove', e => {
+            if (!isPanning) return;
+            viewOffX += e.clientX - panLastX;
+            viewOffY += e.clientY - panLastY;
+            panLastX = e.clientX;
+            panLastY = e.clientY;
+            drawPreview();
+        });
+
+        window.addEventListener('mouseup', () => {
+            isPanning = false;
+            canvas.classList.remove('panning');
+        });
+    }
+
+    // =========================================================
+    // === UI WIRING
+    // =========================================================
+
+    // Drag-and-drop
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropZone.classList.remove('drag-over');
+        const file = e.dataTransfer.files[0];
+        if (file) loadFile(file);
+    });
+    fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+
+    // Tool diameter change → rebuild toolpath + redraw
+    document.getElementById('toolDiam').addEventListener('input', () => {
+        if (!outerContour) return;
+        const toolDiam = parseFloat(document.getElementById('toolDiam').value);
+        toolpath     = offsetPolygon(outerContour, toolDiam / 2);
+        toolpathLens = computeArcLengths(toolpath);
+        drawPreview();
+    });
+
+    // Cut depth / pass depth change → update pass count display
+    document.getElementById('cutDepth').addEventListener('input', updatePassCount);
+    document.getElementById('passDepth').addEventListener('input', updatePassCount);
+
+    function updateTabHint() {
+        const cutDepth  = parseFloat(document.getElementById('cutDepth').value);
+        const passDepth = parseFloat(document.getElementById('passDepth').value);
+        const tabLayers = Math.max(1, parseInt(document.getElementById('tabLayers').value) || 1);
+        const hint      = document.getElementById('tabThicknessHint');
+        if (!hint) return;
+        if (isNaN(cutDepth) || isNaN(passDepth) || passDepth <= 0) {
+            hint.textContent = '= — mm of material left as tab';
+            return;
+        }
+        const passes = buildPasses(cutDepth, passDepth);
+        // Actual thickness = depth from the start of the first tabbed pass down to cutDepth.
+        // First tabbed pass is at index: passes.length - tabLayers (clamped to 0).
+        const firstTabbedIdx = Math.max(0, passes.length - tabLayers);
+        const depthBefore    = firstTabbedIdx > 0 ? Math.abs(passes[firstTabbedIdx - 1]) : 0;
+        const actualMm       = (Math.abs(cutDepth) - depthBefore).toFixed(2);
+        hint.textContent = `= ${actualMm} mm of material left as tab`;
+    }
+
+    document.getElementById('tabLayers').addEventListener('input', updateTabHint);
+    document.getElementById('passDepth').addEventListener('input', updateTabHint);
+    document.getElementById('cutDepth').addEventListener('input', updateTabHint);
+
+    // Tab mode toggle
+    tabModeBtn.addEventListener('click', () => {
+        tabModeActive = !tabModeActive;
+        tabModeBtn.classList.toggle('active', tabModeActive);
+        canvas.classList.toggle('tab-mode', tabModeActive);
+        tabHint.style.display = tabModeActive ? 'block' : 'none';
+    });
+
+    // Generate G-code
+    generateBtn.addEventListener('click', () => {
+        gcodeText = generateGcode();
+        gcodeOutput.value = gcodeText;
+        show(gcodeSection);
+    });
+
+    // Copy G-code
+    copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(gcodeOutput.value).then(() => {
+            const orig = copyBtn.textContent;
+            copyBtn.textContent = 'Copied!';
+            setTimeout(() => { copyBtn.textContent = orig; }, 1500);
+        });
+    });
+
+    // Download G-code as .nc
+    downloadBtn.addEventListener('click', () => {
+        const blob = new Blob([gcodeOutput.value], { type: 'text/plain' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = 'pcbmill.nc';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+
+    // =========================================================
+    // === INIT
+    // =========================================================
+
+    new ResizeObserver(resizeCanvas).observe(canvas.parentElement);
+    resizeCanvas();
+    initCanvasInteraction();
+
+    </script>
+</body>
+</html>
