@@ -519,10 +519,11 @@
 
     // Parse a copper Gerber layer. Returns {segments:[{x1,y1,x2,y2,r}], flashes:[{x,y,ap}]}.
 
-    // Parse an SVG path `d` attribute into closed polygon arrays.
+    // Parse an SVG path `d` attribute into point-sequence arrays.
     // Handles M/L/H/V/A/C/S/Q/T/Z (absolute and relative).
     // Arcs are approximated with line segments; beziers use only the endpoint.
-    function parseSVGPathData(d) {
+    // minPts: minimum points to include a sequence (3 for closed polygons, 2 for open traces).
+    function parseSVGPathData(d, minPts = 3) {
         const polys = [];
         let pts = [], curX = 0, curY = 0, startX = 0, startY = 0;
 
@@ -573,7 +574,7 @@
             if (typeof tok === 'string') {
                 cmd = tok; i++;
                 if (cmd.toUpperCase() === 'Z') {
-                    if (pts.length >= 3) polys.push(pts);
+                    if (pts.length >= minPts) polys.push(pts);
                     pts = []; curX = startX; curY = startY;
                 }
                 continue;
@@ -583,7 +584,7 @@
             const ax = v => rel ? curX + v : v;
             const ay = v => rel ? curY + v : v;
             if (up === 'M') {
-                if (pts.length >= 3) polys.push(pts);
+                if (pts.length >= minPts) polys.push(pts);
                 curX = ax(tok); curY = ay(n(1)); i += 2;
                 startX = curX; startY = curY;
                 pts = [{ x: curX, y: curY }];
@@ -615,7 +616,7 @@
                 pts.push({ x: curX, y: curY });
             } else { i++; } // unknown — skip one token
         }
-        if (pts.length >= 3) polys.push(pts);
+        if (pts.length >= minPts) polys.push(pts);
         return polys;
     }
 
@@ -629,28 +630,54 @@
 
         const regions = [];
 
-        // <path> — traces and pads as filled outlines or stroked center-lines
+        // Walk up the DOM to find the nearest ancestor that declares a style property.
+        function inheritedProp(el, prop) {
+            const re = new RegExp(prop + '\\s*:\\s*([^;]+)');
+            let node = el;
+            while (node && node.getAttribute) {
+                const style = node.getAttribute('style') || '';
+                const m = style.match(re);
+                if (m) return m[1].trim();
+                node = node.parentNode;
+            }
+            return null;
+        }
+
+        // <path> elements — KiCad uses two styles:
+        //   fill:COLOR  stroke:none  → pad / copper region polygon
+        //   fill:none   stroke:COLOR stroke-width:N → trace center-line
         for (const el of doc.querySelectorAll('path')) {
             const d = el.getAttribute('d');
             if (!d) continue;
-            const sw = parseFloat(el.getAttribute('stroke-width') ||
-                                  el.style?.strokeWidth || 0);
-            for (const poly of parseSVGPathData(d)) {
-                if (poly.length >= 3) {
+            const fillVal = inheritedProp(el, 'fill') || '';
+            const isFilled = fillVal !== '' && fillVal !== 'none';
+
+            if (isFilled) {
+                // Filled shape — pad or copper fill polygon
+                for (const poly of parseSVGPathData(d, 3)) {
                     regions.push(poly);
-                } else if (poly.length === 2 && sw > 0) {
-                    // Open stroke — treat as a trace segment
-                    regions.push(circlePoints(
-                        (poly[0].x + poly[1].x) / 2,
-                        (poly[0].y + poly[1].y) / 2,
-                        sw / 2, 24
-                    ));
+                }
+            } else {
+                // Stroked center-line — trace
+                const swStr = inheritedProp(el, 'stroke-width');
+                const sw    = swStr ? parseFloat(swStr) : 0;
+                if (sw > 0) {
+                    // minPts=2 so open 2-point segments are returned
+                    for (const pts of parseSVGPathData(d, 2)) {
+                        for (let k = 0; k + 1 < pts.length; k++) {
+                            regions.push(stadiumBuffer(
+                                pts[k].x, pts[k].y, pts[k + 1].x, pts[k + 1].y, sw / 2
+                            ));
+                        }
+                    }
                 }
             }
         }
 
-        // <circle> — round pads / vias
+        // <circle> — round pads / vias (filled → copper; stroke-only → drill indicator, skip)
         for (const el of doc.querySelectorAll('circle')) {
+            const fillVal = inheritedProp(el, 'fill') || '';
+            if (fillVal === 'none') continue;   // drill indicator outline, not copper
             const cx = parseFloat(el.getAttribute('cx') || 0);
             const cy = parseFloat(el.getAttribute('cy') || 0);
             const r  = parseFloat(el.getAttribute('r')  || 0);
@@ -659,6 +686,8 @@
 
         // <rect> — rectangular SMD pads (some KiCad versions)
         for (const el of doc.querySelectorAll('rect')) {
+            const fillVal = inheritedProp(el, 'fill') || '';
+            if (fillVal === 'none') continue;
             const x = parseFloat(el.getAttribute('x') || 0);
             const y = parseFloat(el.getAttribute('y') || 0);
             const w = parseFloat(el.getAttribute('width')  || 0);
@@ -670,6 +699,8 @@
 
         // <polygon> — arbitrary filled pads
         for (const el of doc.querySelectorAll('polygon')) {
+            const fillVal = inheritedProp(el, 'fill') || '';
+            if (fillVal === 'none') continue;
             const raw = (el.getAttribute('points') || '').trim().split(/[\s,]+/).map(Number);
             const poly = [];
             for (let k = 0; k + 1 < raw.length; k += 2) poly.push({ x: raw[k], y: raw[k + 1] });
@@ -696,26 +727,44 @@
         while ((m = addPattern.exec(content)) !== null) {
             const code = parseInt(m[1]);
             const type = m[2].toUpperCase();
-            // Extract all positive numbers from the parameter string
-            const nums = (m[3].match(/[\d.]+(?:[eE][+-]?\d+)?/g) || [])
-                .map(Number).filter(n => n > 0);
+            // Extract ALL numbers including negatives (corner offsets use negative values)
+            const all = (m[3].match(/[+-]?[\d.]+(?:[eE][+-]?\d+)?/g) || []).map(Number);
             if (type === 'C') {
-                apertures[code] = { type: 'C', w: nums[0] || 0 };
+                if (all[0] > 0) apertures[code] = { type: 'C', w: all[0] };
             } else if (type === 'R') {
-                apertures[code] = { type: 'R', w: nums[0] || 0, h: nums[1] || nums[0] || 0 };
+                apertures[code] = { type: 'R', w: all[0] || 0, h: all[1] || all[0] || 0 };
             } else if (type === 'O') {
-                apertures[code] = { type: 'O', w: nums[0] || 0, h: nums[1] || nums[0] || 0 };
+                apertures[code] = { type: 'O', w: all[0] || 0, h: all[1] || all[0] || 0 };
             } else if (type === 'P') {
-                // Regular polygon aperture: outer_diam, vertices, [rotation, [inner_diam]]
-                // Approximate as circle using the outer diameter.
-                apertures[code] = { type: 'C', w: nums[0] || 0 };
+                // Regular polygon: outer_diam, vertices[, rotation[, inner_diam]]
+                if (all[0] > 0) apertures[code] = { type: 'C', w: all[0] };
+            } else if (type === 'ROUNDRECT') {
+                // KiCad format: $1=corner_radius, $2/$3…$8/$9=four corner x/y pairs, $10=rotation.
+                // Pad extent = bounding box of corner centres + corner_radius on each side.
+                if (all.length >= 9) {
+                    const r = Math.abs(all[0]);
+                    const xs = [all[1], all[3], all[5], all[7]];
+                    const ys = [all[2], all[4], all[6], all[8]];
+                    const w  = Math.max(...xs) - Math.min(...xs) + 2 * r;
+                    const h  = Math.max(...ys) - Math.min(...ys) + 2 * r;
+                    if (w > 0 && h > 0) apertures[code] = { type: 'R', w, h };
+                }
             } else {
-                // Aperture macro (e.g. RoundRect, Thermal, etc.).
-                // Use first two numbers as width × height; fall back to circle if only one.
-                if (nums.length >= 2) {
-                    apertures[code] = { type: 'R', w: nums[0], h: nums[1] };
-                } else if (nums.length === 1) {
-                    apertures[code] = { type: 'C', w: nums[0] };
+                // Generic macro: treat first value as a radius/size, rest as alternating x/y coords.
+                // Compute bounding box to get a representative w × h.
+                if (all.length >= 3) {
+                    const r  = Math.abs(all[0]);
+                    const xs = all.filter((_, i) => i >= 1 && i % 2 === 1);
+                    const ys = all.filter((_, i) => i >= 1 && i % 2 === 0);
+                    if (xs.length && ys.length) {
+                        const w = Math.max(...xs) - Math.min(...xs) + 2 * r;
+                        const h = Math.max(...ys) - Math.min(...ys) + 2 * r;
+                        if (w > 0 && h > 0) apertures[code] = { type: 'R', w, h };
+                    }
+                } else {
+                    const pos = all.filter(n => n > 0);
+                    if (pos.length >= 2) apertures[code] = { type: 'R', w: pos[0], h: pos[1] };
+                    else if (pos.length === 1) apertures[code] = { type: 'C', w: pos[0] };
                 }
             }
         }
@@ -971,7 +1020,9 @@
             ClipperLib.PolyFillType.pftNonZero
         );
 
-        // Step 3 — for each pass, offset the union outward and collect boundary loops.
+        // Step 3 — for each pass, offset the union outward and collect OUTER boundary loops only.
+        // Inner loops (e.g. paths routing into through-hole/drill areas) are identified by
+        // having negative signed area (CW winding in Clipper's convention) and discarded.
         const paths = [];
         for (let p = 0; p < numPasses; p++) {
             const expandBy = toolDiam / 2 + isoWidth + p * stepover;
@@ -980,7 +1031,10 @@
             const result = new ClipperLib.Paths();
             co.Execute(result, expandBy * CLIPPER_SCALE);
             for (const cpoly of result) {
-                if (cpoly.length >= 2) paths.push(fromClipper(cpoly));
+                if (cpoly.length < 2) continue;
+                // Keep only outer loops (positive area = CCW in Clipper's Y-up convention).
+                // Negative area means CW = a hole contour going into a drill/void area.
+                if (ClipperLib.Clipper.Area(cpoly) >= 0) paths.push(fromClipper(cpoly));
             }
         }
         return paths;
