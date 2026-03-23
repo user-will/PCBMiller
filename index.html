@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PCBMiller</title>
+    <!-- Clipper.js: polygon offset/union (JS port of Angus Johnson's Clipper) -->
+    <script src="https://cdn.jsdelivr.net/npm/clipper-lib@6.4.2/clipper.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -737,38 +739,37 @@
     // === ISOLATION TOOLPATH GENERATION
     // =========================================================
 
-    // Generate a stadium (capsule) polygon around a stroke segment at radius d from center.
-    // Returns a closed [{x,y}] polyline.
+    // Clipper integer scale: 1 mm = CLIPPER_SCALE units (1 nm precision)
+    const CLIPPER_SCALE = 1e6;
+    // Arc tolerance for ClipperOffset (in Clipper units) — 0.01 mm
+    const CLIPPER_ARC_TOL = CLIPPER_SCALE * 0.01;
+
+    function toClipper(pts) {
+        return pts.map(p => ({ X: Math.round(p.x * CLIPPER_SCALE), Y: Math.round(p.y * CLIPPER_SCALE) }));
+    }
+
+    function fromClipper(cpoly) {
+        return cpoly.map(p => ({ x: p.X / CLIPPER_SCALE, y: p.Y / CLIPPER_SCALE }));
+    }
+
+    // Generate a stadium (capsule) polygon around a stroke at radius d from center line.
     function stadiumBuffer(x1, y1, x2, y2, d) {
         const dx = x2 - x1, dy = y2 - y1;
         const len = Math.sqrt(dx * dx + dy * dy);
-        // Degenerate segment → circle
-        if (len < 0.001) {
-            return Array.from({ length: 16 }, (_, i) => ({
-                x: x1 + d * Math.cos(2 * Math.PI * i / 16),
-                y: y1 + d * Math.sin(2 * Math.PI * i / 16)
-            }));
-        }
-        const tx = dx / len, ty = dy / len; // unit tangent
-        const nx = -ty, ny = tx;             // unit left-normal
-        const a0 = Math.atan2(ny, nx);       // angle of the +normal direction
-        const CAP = 8;                        // segments per semicircle
+        if (len < 0.001) return circlePoints(x1, y1, d, 24);
+        const nx = -dy / len, ny = dx / len;
+        const a0 = Math.atan2(ny, nx);
+        const CAP = 8;
         const pts = [];
-
-        // End cap at P2: sweep from +normal side to -normal side, going around the far end (+tangent)
         for (let i = 0; i <= CAP; i++) {
             const a = a0 - Math.PI * i / CAP;
             pts.push({ x: x2 + d * Math.cos(a), y: y2 + d * Math.sin(a) });
         }
-        // Left side back to P1
         pts.push({ x: x1 - nx * d, y: y1 - ny * d });
-
-        // Start cap at P1: sweep from -normal side to +normal side, going around the near end (-tangent)
         for (let i = 1; i < CAP; i++) {
             const a = (a0 + Math.PI) - Math.PI * i / CAP;
             pts.push({ x: x1 + d * Math.cos(a), y: y1 + d * Math.sin(a) });
         }
-        // Closing segment (implicit via drawPolyline close): +normal at P1 → +normal at P2 = right side ✓
         return pts;
     }
 
@@ -780,18 +781,14 @@
         }));
     }
 
-    // Generate an offset rectangle polygon (optionally with rounded corners for obround).
-    // ap = {type:'R'|'O', w, h}; offset = total outward offset.
+    // Generate pad polygon for a flash aperture.  offset=0 returns the bare shape.
+    // ap = {type:'C'|'R'|'O', w, h}
     function flashBuffer(cx, cy, ap, offset) {
         const hw = ap.w / 2 + offset;
-        const hh = ap.h / 2 + offset;
-        if (ap.type === 'C') {
-            return circlePoints(cx, cy, ap.w / 2 + offset);
-        }
+        const hh = (ap.h || ap.w) / 2 + offset;
+        if (ap.type === 'C') return circlePoints(cx, cy, ap.w / 2 + offset, 24);
         if (ap.type === 'O') {
-            // Obround: like a rectangle but with semicircular ends
-            // For simplicity, treat as an ellipse-approximated rectangle with rounded corners
-            const r = Math.min(hw, hh); // corner radius = shorter half
+            const r = Math.min(hw, hh);
             const rx = hw - r, ry = hh - r;
             const N = 8;
             const corners = [
@@ -807,45 +804,71 @@
                 }))
             );
         }
-        // Rectangle: simple 4 corners (slightly larger by offset)
         return [
             { x: cx - hw, y: cy - hh }, { x: cx + hw, y: cy - hh },
             { x: cx + hw, y: cy + hh }, { x: cx - hw, y: cy + hh }
         ];
     }
 
-    // Build all isolation toolpaths for the given copper geometry.
-    // Returns [[{x,y}]] — one polyline per copper shape per pass.
+    // Build isolation toolpaths using Clipper for correct polygon union + offset.
+    //
+    // The algorithm matches pcb2gcode's approach (bg::buffer / ClipperOffset):
+    //   1. Represent every copper feature as a polygon (stadium for strokes, pad
+    //      shape for flashes, region polygons as-is).
+    //   2. Union all copper polygons → one merged multi-polygon.
+    //   3. For each isolation pass, expand the union outward by
+    //        tool_radius + clearance + pass * stepover
+    //      using ClipperOffset with round joins.  The resulting polygon boundaries
+    //      are the tool-centre paths — correctly handling concave traces, shared
+    //      pad-to-trace junctions, and adjacent-trace clearance merging.
+    //
+    // Returns [[{x,y}]] — one closed polyline per boundary loop per pass.
     function buildIsolationToolpaths(segments, flashes, regions) {
+        if (typeof ClipperLib === 'undefined') {
+            console.error('ClipperLib not loaded');
+            return [];
+        }
+
         const toolDiam   = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
         const isoWidth   = parseFloat(document.getElementById('isoWidth').value) || 0.2;
         const numPasses  = parseInt(document.getElementById('isoPasses').value) || 2;
         const overlapPct = parseFloat(document.getElementById('isoOverlap').value) || 50;
-        const overlap    = overlapPct / 100;
-        const stepover   = toolDiam * (1 - overlap);
+        const stepover   = toolDiam * (1 - overlapPct / 100);
 
+        // Step 1 — convert all copper to Clipper polygons (the bare copper shape, no clearance yet).
+        const copperPolys = [];
+        for (const seg of segments) {
+            if (seg.r > 0)
+                copperPolys.push(toClipper(stadiumBuffer(seg.x1, seg.y1, seg.x2, seg.y2, seg.r)));
+        }
+        for (const flash of flashes) {
+            copperPolys.push(toClipper(flashBuffer(flash.x, flash.y, flash.ap, 0)));
+        }
+        for (const region of regions) {
+            if (region.length >= 3) copperPolys.push(toClipper(region));
+        }
+        if (!copperPolys.length) return [];
+
+        // Step 2 — union all copper shapes.
+        const clipper = new ClipperLib.Clipper();
+        clipper.AddPaths(copperPolys, ClipperLib.PolyType.ptSubject, true);
+        const united = new ClipperLib.Paths();
+        clipper.Execute(
+            ClipperLib.ClipType.ctUnion, united,
+            ClipperLib.PolyFillType.pftNonZero,
+            ClipperLib.PolyFillType.pftNonZero
+        );
+
+        // Step 3 — for each pass, offset the union outward and collect boundary loops.
         const paths = [];
         for (let p = 0; p < numPasses; p++) {
-            const offset = toolDiam / 2 + isoWidth + p * stepover;
-
-            // Older-style D01 strokes
-            for (const seg of segments) {
-                const d = seg.r + offset;
-                const poly = stadiumBuffer(seg.x1, seg.y1, seg.x2, seg.y2, d);
-                if (poly.length >= 3) paths.push(poly);
-            }
-
-            // Older-style D03 flashes (pads)
-            for (const flash of flashes) {
-                const poly = flashBuffer(flash.x, flash.y, flash.ap, offset);
-                if (poly.length >= 3) paths.push(poly);
-            }
-
-            // Modern G36/G37 region fills — offset each polygon outward
-            for (const region of regions) {
-                if (region.length < 3) continue;
-                const iso = offsetPolygon(region, offset);
-                if (iso.length >= 3) paths.push(iso);
+            const expandBy = toolDiam / 2 + isoWidth + p * stepover;
+            const co = new ClipperLib.ClipperOffset(2.0, CLIPPER_ARC_TOL);
+            co.AddPaths(united, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
+            const result = new ClipperLib.Paths();
+            co.Execute(result, expandBy * CLIPPER_SCALE);
+            for (const cpoly of result) {
+                if (cpoly.length >= 2) paths.push(fromClipper(cpoly));
             }
         }
         return paths;
