@@ -97,6 +97,7 @@
         .info-label { color: #888; }
         .info-value { color: #eee; }
         .hint { font-size: 0.75rem; color: #555; margin-top: 4px; }
+        #vbitPreview { display: block; width: 240px; height: 148px; border-radius: 6px; margin: 8px 0 4px; }
         .computing-msg { font-size: 0.75rem; color: #f5a623; margin-top: 6px; display: none; }
         .error { font-size: 0.8rem; color: #e94560; margin-top: 6px; }
         textarea {
@@ -162,28 +163,38 @@
         <div id="isolationSection" class="hidden">
             <h2>Isolation Routing</h2>
             <div class="input-group">
+                <label>V-Bit Angle</label>
+                <div class="input-row">
+                    <input type="number" id="vbitAngle" value="30" step="5" min="5" max="175">
+                    <span class="unit">°</span>
+                </div>
+                <div class="hint">Included angle of your engraving bit (e.g. 30°, 45°, 60°, 90°)</div>
+            </div>
+            <div class="input-group">
+                <label>V-Bit Tip Diameter</label>
+                <div class="input-row">
+                    <input type="number" id="isoToolDiam" value="0.1" step="0.05" min="0.01" max="2">
+                    <span class="unit">mm</span>
+                </div>
+                <div class="hint">Flat tip width — use 0 for a perfect point</div>
+            </div>
+            <div class="input-group">
                 <label>Isolation Width</label>
                 <div class="input-row">
                     <input type="number" id="isoWidth" value="0.2" step="0.05" min="0.05" max="5">
                     <span class="unit">mm</span>
                 </div>
-                <div class="hint">Clearance gap from trace edge</div>
-            </div>
-            <div class="input-group">
-                <label>V-bit Tip Diameter</label>
-                <div class="input-row">
-                    <input type="number" id="isoToolDiam" value="0.1" step="0.05" min="0.01" max="2">
-                    <span class="unit">mm</span>
-                </div>
+                <div class="hint">Minimum clearance gap from trace edge</div>
             </div>
             <div class="input-group">
                 <label>Copper Cut Depth</label>
                 <div class="input-row">
-                    <input type="number" id="isoDepth" value="-0.05" step="0.01" max="0">
+                    <input type="number" id="isoDepth" value="-0.05" step="0.001" max="0">
                     <span class="unit">mm</span>
                 </div>
-                <div class="hint">0.035 mm = 1oz copper thickness</div>
+                <div class="hint" id="isoDepthHint">0.035 mm = 1oz copper thickness</div>
             </div>
+            <canvas id="vbitPreview" width="240" height="148"></canvas>
             <div class="input-group">
                 <label>Isolation Passes</label>
                 <div class="input-row">
@@ -1815,6 +1826,7 @@ self.onmessage = function(e) {
                 copperDropZone.classList.add('copper-loaded');
                 copperFilenameEl.textContent = file.name;
                 show(isolationSection);
+                updateIsoDepthFromAngle();
                 if (!boardBounds) show(infoSection);
                 generateBtn.disabled = false;
 
@@ -1831,6 +1843,169 @@ self.onmessage = function(e) {
             }
         };
         reader.readAsText(file);
+    }
+
+    function drawVbitPreview() {
+        const el = document.getElementById('vbitPreview');
+        if (!el) return;
+        const ctx = el.getContext('2d');
+        const CW = el.width, CH = el.height;
+
+        const angle   = parseFloat(document.getElementById('vbitAngle').value) || 30;
+        const depth   = Math.max(0.001, Math.abs(parseFloat(document.getElementById('isoDepth').value) || 0.05));
+        const tipDiam = Math.max(0, parseFloat(document.getElementById('isoToolDiam').value) || 0);
+
+        const tanHalf = Math.tan((angle / 2) * (Math.PI / 180));
+        const cutW    = tipDiam + 2 * depth * tanHalf;
+
+        // Layout
+        const LABEL_TOP = 15, LABEL_BOT = 14, BIT_ABOVE = 20, MARGIN_X = 12;
+        const surfaceY = LABEL_TOP + BIT_ABOVE;
+        const availH   = CH - surfaceY - LABEL_BOT;
+        const availW   = CW - 2 * MARGIN_X;
+        const COPPER   = 3;
+
+        // Scale: fit depth vertically and cut width horizontally
+        const sc = Math.min(availH / depth, (availW * 0.88) / Math.max(cutW, 0.0001));
+
+        const depthPx   = depth * sc;
+        const cwHalfPx  = (cutW / 2) * sc;
+        const tipHalfPx = (tipDiam / 2) * sc;
+        const cx        = CW / 2;
+        const tipY      = surfaceY + depthPx;
+
+        ctx.clearRect(0, 0, CW, CH);
+
+        // Background
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, CW, CH);
+
+        // PCB substrate
+        ctx.fillStyle = '#1d2640';
+        ctx.fillRect(MARGIN_X, surfaceY, availW, depthPx + 6);
+
+        // Copper layer
+        ctx.fillStyle = '#c07820';
+        ctx.fillRect(MARGIN_X, surfaceY - COPPER, availW, COPPER);
+
+        // V-cut (removed material)
+        ctx.beginPath();
+        ctx.moveTo(cx - cwHalfPx, surfaceY - COPPER);
+        ctx.lineTo(cx - tipHalfPx, tipY);
+        ctx.lineTo(cx + tipHalfPx, tipY);
+        ctx.lineTo(cx + cwHalfPx,  surfaceY - COPPER);
+        ctx.closePath();
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fill();
+
+        // Bit walls (silver — full V from tip through surface into air above)
+        ctx.strokeStyle = '#b0b0b0';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(cx - cwHalfPx - BIT_ABOVE * tanHalf, surfaceY - COPPER - BIT_ABOVE);
+        ctx.lineTo(cx - tipHalfPx, tipY);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx + cwHalfPx + BIT_ABOVE * tanHalf, surfaceY - COPPER - BIT_ABOVE);
+        ctx.lineTo(cx + tipHalfPx, tipY);
+        ctx.stroke();
+        if (tipDiam > 0.005) {
+            ctx.beginPath();
+            ctx.moveTo(cx - tipHalfPx, tipY);
+            ctx.lineTo(cx + tipHalfPx, tipY);
+            ctx.stroke();
+        }
+
+        // Cut edge highlight (copper colour where V meets the PCB)
+        ctx.strokeStyle = '#e09030';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(cx - cwHalfPx, surfaceY - COPPER);
+        ctx.lineTo(cx - tipHalfPx, tipY);
+        ctx.moveTo(cx + cwHalfPx,  surfaceY - COPPER);
+        ctx.lineTo(cx + tipHalfPx, tipY);
+        ctx.stroke();
+
+        // --- Annotations ---
+        ctx.setLineDash([]);
+        ctx.font = '10px system-ui, sans-serif';
+
+        // Cut width: dashed span + label above
+        const cwLineY = surfaceY - COPPER - 5;
+        ctx.strokeStyle = '#40c070';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(cx - cwHalfPx, cwLineY);
+        ctx.lineTo(cx + cwHalfPx, cwLineY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(cx - cwHalfPx, cwLineY - 2); ctx.lineTo(cx - cwHalfPx, cwLineY + 2);
+        ctx.moveTo(cx + cwHalfPx, cwLineY - 2); ctx.lineTo(cx + cwHalfPx, cwLineY + 2);
+        ctx.stroke();
+        ctx.fillStyle = '#40c070';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`${cutW.toFixed(3)} mm`, cx, cwLineY - 2);
+
+        // Depth: dashed vertical line to right of cut (if it fits), label at bottom
+        const dvX = cx + cwHalfPx + 8;
+        if (dvX < CW - 2) {
+            ctx.strokeStyle = '#5090e0';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 2]);
+            ctx.beginPath();
+            ctx.moveTo(dvX, surfaceY);
+            ctx.lineTo(dvX, tipY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(dvX - 2, surfaceY); ctx.lineTo(dvX + 2, surfaceY);
+            ctx.moveTo(dvX - 2, tipY);     ctx.lineTo(dvX + 2, tipY);
+            ctx.stroke();
+        }
+        ctx.fillStyle = '#5090e0';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`depth: ${depth.toFixed(3)} mm`, cx, CH - 1);
+    }
+
+    // Calculate cut width at a given depth for the current V-bit angle and tip diameter.
+    function isoCalcCutWidth(depth, angle, tipDiam) {
+        if (!angle || angle <= 0 || angle >= 180) return null;
+        return tipDiam + 2 * Math.abs(depth) * Math.tan((angle / 2) * (Math.PI / 180));
+    }
+
+    // Update the depth hint to show the actual cut width produced at the current depth.
+    function updateIsoDepthHint() {
+        const angle   = parseFloat(document.getElementById('vbitAngle').value);
+        const depth   = parseFloat(document.getElementById('isoDepth').value) || -0.05;
+        const tipDiam = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
+        const hint    = document.getElementById('isoDepthHint');
+        if (!hint) return;
+        const w = isoCalcCutWidth(depth, angle, tipDiam);
+        if (w == null) {
+            hint.textContent = '0.035 mm = 1oz copper thickness';
+        } else {
+            hint.textContent = `Cut width at this depth: ${w.toFixed(3)} mm  ·  0.035 mm = 1oz copper`;
+        }
+        drawVbitPreview();
+    }
+
+    // Auto-calculate the required depth from angle + isolation width + tip diameter.
+    function updateIsoDepthFromAngle() {
+        const angle    = parseFloat(document.getElementById('vbitAngle').value);
+        const isoWidth = parseFloat(document.getElementById('isoWidth').value) || 0.2;
+        const tipDiam  = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
+        if (!angle || angle <= 0 || angle >= 180) return;
+        const tanHalf = Math.tan((angle / 2) * (Math.PI / 180));
+        if (tanHalf <= 0) return;
+        let depth = (isoWidth - tipDiam) / (2 * tanHalf);
+        if (depth < 0.005) depth = 0.005;
+        document.getElementById('isoDepth').value = (-depth).toFixed(3);
+        updateIsoDepthHint();
     }
 
     function rebuildIsolation() {
@@ -2010,8 +2185,25 @@ self.onmessage = function(e) {
     });
     copperFileInput.addEventListener('change', e => { if (e.target.files[0]) loadCopperFile(e.target.files[0]); });
 
+    // V-bit angle → auto-calculate depth, update hint, rebuild toolpaths
+    document.getElementById('vbitAngle').addEventListener('input', () => {
+        updateIsoDepthFromAngle();
+        rebuildIsolation();
+    });
+
+    // isoWidth / isoToolDiam → recalc depth from angle (if set), then rebuild
+    ['isoWidth', 'isoToolDiam'].forEach(id => {
+        document.getElementById(id).addEventListener('input', () => {
+            updateIsoDepthFromAngle();
+            rebuildIsolation();
+        });
+    });
+
+    // Manual depth override → just update the cut-width hint
+    document.getElementById('isoDepth').addEventListener('input', updateIsoDepthHint);
+
     // Isolation parameter changes → rebuild toolpaths
-    ['isoWidth', 'isoToolDiam', 'isoPasses', 'isoOverlap'].forEach(id => {
+    ['isoPasses', 'isoOverlap'].forEach(id => {
         document.getElementById(id).addEventListener('input', rebuildIsolation);
     });
 
