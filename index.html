@@ -162,7 +162,7 @@
             <div class="input-group">
                 <label>Isolation Passes</label>
                 <div class="input-row">
-                    <input type="number" id="isoPasses" value="2" step="1" min="1" max="10">
+                    <input type="number" id="isoPasses" value="2" step="1" min="1" max="200">
                     <span class="unit">passes</span>
                 </div>
             </div>
@@ -1020,22 +1020,93 @@
             ClipperLib.PolyFillType.pftNonZero
         );
 
-        // Step 3 — for each pass, offset the union outward and collect OUTER boundary loops only.
-        // Inner loops (e.g. paths routing into through-hole/drill areas) are identified by
-        // having negative signed area (CW winding in Clipper's convention) and discarded.
+        // Step 3 — for each pass, compute the remaining copper-free area and collect its
+        // boundaries as tool paths.
+        //
+        // KEY INSIGHT for ground-fill boards: when a board has a ground plane, the isolation
+        // groove is the GAP between a trace and the ground fill.  That gap is an inner contour
+        // (hole) in the copper union.  When the copper union is offset outward, the gap shrinks
+        // from both sides.  The boundaries of the shrinking gap ARE the isolation paths, but
+        // they are inner contours (negative area) and were previously discarded.
+        //
+        // Correct algorithm (board outline loaded):
+        //   freeArea = board_polygon  MINUS  expanded_copper
+        //   toolpaths = all boundaries of freeArea EXCEPT the board outline itself.
+        // This naturally handles both ground-fill and non-ground-fill boards:
+        //   - Ground-fill: freeArea = narrow strips around traces (positive-area small polygons)
+        //   - No ground-fill: freeArea = board with circular holes punched out (negative-area holes)
+        //   In both cases the boundaries are the isolation rings we want to mill.
+        //
+        // Without board outline: fall back to outer-contour-only approach (works for non-ground-fill).
+
+        // Board-boundary path in Clipper coords.
+        // When the edge-cuts file is loaded we use the real outline; otherwise we synthesise a
+        // bounding-box boundary from the copper union itself (expanded by a small margin) so the
+        // Difference algorithm works even without edge cuts.
+        let boardClipPath = null;
+        let boardArea = 0;
+        if (typeof outerContour !== 'undefined' && outerContour && outerContour.length >= 3) {
+            boardClipPath = toClipper(outerContour);
+        } else {
+            // Derive a synthetic boundary from the bounding box of all copper polygons.
+            const margin = 1.0 * CLIPPER_SCALE; // 1 mm margin outside copper extent
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const poly of united) {
+                for (const pt of poly) {
+                    if (pt.X < minX) minX = pt.X;
+                    if (pt.Y < minY) minY = pt.Y;
+                    if (pt.X > maxX) maxX = pt.X;
+                    if (pt.Y > maxY) maxY = pt.Y;
+                }
+            }
+            if (isFinite(minX)) {
+                boardClipPath = [
+                    { X: minX - margin, Y: minY - margin },
+                    { X: maxX + margin, Y: minY - margin },
+                    { X: maxX + margin, Y: maxY + margin },
+                    { X: minX - margin, Y: maxY + margin },
+                ];
+            }
+        }
+        if (boardClipPath) {
+            boardArea = Math.abs(ClipperLib.Clipper.Area(boardClipPath));
+        }
+
         const paths = [];
         for (let p = 0; p < numPasses; p++) {
             const expandBy = toolDiam / 2 + isoWidth + p * stepover;
             const co = new ClipperLib.ClipperOffset(2.0, CLIPPER_ARC_TOL);
             co.AddPaths(united, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
-            const result = new ClipperLib.Paths();
-            co.Execute(result, expandBy * CLIPPER_SCALE);
-            for (const cpoly of result) {
-                if (cpoly.length < 2) continue;
-                // Keep only outer loops (positive area = CCW in Clipper's Y-up convention).
-                // Negative area means CW = a hole contour going into a drill/void area.
-                if (ClipperLib.Clipper.Area(cpoly) >= 0) paths.push(fromClipper(cpoly));
+            const expanded = new ClipperLib.Paths();
+            co.Execute(expanded, expandBy * CLIPPER_SCALE);
+            if (!expanded.length) break;
+
+            if (!boardClipPath) break; // No copper at all — nothing to do.
+
+            // freeArea = board MINUS expanded_copper = the still-uncleared region.
+            // Its boundaries (excluding the board outline itself) = isolation tool paths.
+            const dc = new ClipperLib.Clipper();
+            dc.AddPath(boardClipPath, ClipperLib.PolyType.ptSubject, true);
+            dc.AddPaths(expanded, ClipperLib.PolyType.ptClip, true);
+            const freeArea = new ClipperLib.Paths();
+            dc.Execute(
+                ClipperLib.ClipType.ctDifference, freeArea,
+                ClipperLib.PolyFillType.pftNonZero,
+                ClipperLib.PolyFillType.pftNonZero
+            );
+
+            let added = 0;
+            for (const cpoly of freeArea) {
+                if (cpoly.length < 3) continue;
+                // Skip the board/bbox outline: the largest outer polygon whose area is close
+                // to the full boundary area.  Everything smaller is a genuine mill path.
+                const a = Math.abs(ClipperLib.Clipper.Area(cpoly));
+                if (a > 0.5 * boardArea) continue;
+                paths.push(fromClipper(cpoly));
+                added++;
             }
+
+            if (added === 0) break; // Board fully cleared — stop.
         }
         return paths;
     }
