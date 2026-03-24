@@ -1411,12 +1411,15 @@ self.onmessage = function(e) {
         ctx.translate(viewOffX, viewOffY);
         ctx.scale(viewScale, viewScale);
 
-        // Isolation toolpaths — drawn as a stroke with the actual tool diameter width
-        // Each path is the tool CENTER path (running to the SIDE of each trace, not through it)
+        // Isolation toolpaths — drawn at the actual cut width produced by the V-bit
+        // (tip diameter + 2 × depth × tan(half-angle)), not just the tip diameter
         if (copperToolpaths.length) {
-            const toolDiam = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
+            const tipDiam  = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
+            const angle    = parseFloat(document.getElementById('vbitAngle').value) || 30;
+            const depth    = Math.abs(parseFloat(document.getElementById('isoDepth').value) || 0.05);
+            const cutWidth = tipDiam + 2 * depth * Math.tan((angle / 2) * (Math.PI / 180));
             ctx.strokeStyle = 'rgba(220, 180, 30, 0.85)';
-            ctx.lineWidth   = toolDiam;  // world-space width = actual cut width
+            ctx.lineWidth   = cutWidth;  // world-space width = actual cut width at this depth
             ctx.lineCap     = 'round';
             ctx.lineJoin    = 'round';
             for (const path of copperToolpaths) {
@@ -1992,6 +1995,7 @@ self.onmessage = function(e) {
             hint.textContent = `Cut width at this depth: ${w.toFixed(3)} mm  ·  0.035 mm = 1oz copper`;
         }
         drawVbitPreview();
+        scheduleRedraw();
     }
 
     // Auto-calculate the required depth from angle + isolation width + tip diameter.
