@@ -946,6 +946,14 @@ function buildIsolationToolpaths(segments, flashes, regions, params, boardOutlin
     for (var i=0;i<flashes.length;i++) { var f=flashes[i]; copperPolys.push(toClipper(flashBuffer(f.x,f.y,f.ap,0))); }
     for (var i=0;i<regions.length;i++) { var rg=regions[i]; if (rg.length>=3) copperPolys.push(toClipper(rg)); }
     if (!copperPolys.length) return [];
+    // Normalise all copper polygons to CCW winding (Area > 0) before union.
+    // flashBuffer/circlePoints produce CCW; stadiumBuffer and Gerber region polys
+    // produce CW.  With pftNonZero, opposite-winding polygons cancel in their
+    // overlap zone (winding sums to 0), punching holes into pads wherever a trace
+    // or copper-pour region touches them.  Making everything CCW eliminates this.
+    for (var i = 0; i < copperPolys.length; i++) {
+        if (ClipperLib.Clipper.Area(copperPolys[i]) < 0) copperPolys[i].reverse();
+    }
     var clipper = new ClipperLib.Clipper();
     clipper.AddPaths(copperPolys, ClipperLib.PolyType.ptSubject, true);
     var united = new ClipperLib.Paths();
