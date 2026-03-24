@@ -38,6 +38,8 @@
         .drop-zone.loaded { border-color: #4ade80; background: rgba(74,222,128,0.1); }
         .drop-zone.copper-loaded { border-color: #c8922a; background: rgba(200,146,42,0.1); }
         .copper-filename { font-size: 0.8rem; color: #c8922a; margin-top: 8px; word-break: break-all; }
+        .drop-zone.drill-loaded { border-color: #a78bfa; background: rgba(167,139,250,0.1); }
+        .drill-filename { font-size: 0.8rem; color: #a78bfa; margin-top: 8px; word-break: break-all; }
         .drop-zone-text { font-size: 0.9rem; color: #888; }
         .filename { font-size: 0.8rem; color: #4ade80; margin-top: 8px; word-break: break-all; }
         .input-group { margin-bottom: 10px; }
@@ -131,6 +133,41 @@
             <input type="file" id="copperFileInput" accept=".svg,.gbr,.ger,.gtl,.gbl,.gts,.gbs">
             <div class="hint">KiCad: File → Plot → SVG, select F.Cu layer</div>
             <div class="error" id="copperErrorMsg"></div>
+        </div>
+
+        <hr class="section-divider">
+
+        <!-- Drill File (optional) -->
+        <div>
+            <h2>Drill File <span style="color:#555;font-size:0.7rem;text-transform:none">(optional)</span></h2>
+            <div class="drop-zone" id="drillDropZone">
+                <div class="drop-zone-text">Drop .drl / .xln drill file</div>
+                <div class="drill-filename" id="drillFilename"></div>
+            </div>
+            <input type="file" id="drillFileInput" accept=".drl,.xln,.exc,.ncd">
+            <div class="hint">KiCad: File → Fabrication Outputs → Drill Files</div>
+            <div class="error" id="drillErrorMsg"></div>
+        </div>
+
+        <!-- Drill parameters (shown after drill file loads) -->
+        <div id="drillSection" class="hidden">
+            <h2>Drilling</h2>
+            <div class="input-group">
+                <label>Drill Depth</label>
+                <div class="input-row">
+                    <input type="number" id="drillDepth" value="-2.2" step="0.1" min="-20" max="0">
+                    <span class="unit">mm</span>
+                </div>
+                <div class="hint">Below surface — deeper than board thickness</div>
+            </div>
+            <div class="input-group">
+                <label>Drill Feed Rate</label>
+                <div class="input-row">
+                    <input type="number" id="drillFeedRate" value="100" step="10" min="10" max="500">
+                    <span class="unit">mm/min</span>
+                </div>
+            </div>
+            <hr class="section-divider">
         </div>
 
         <!-- Isolation parameters (shown after copper file loads) -->
@@ -283,6 +320,7 @@
             <div class="info-row"><span class="info-label">Passes</span><span class="info-value" id="infoPasses">—</span></div>
             <div class="info-row" id="infoTracesRow" style="display:none"><span class="info-label">Traces</span><span class="info-value" id="infoTraces">—</span></div>
             <div class="info-row" id="infoIsoPathsRow" style="display:none"><span class="info-label">Iso paths</span><span class="info-value" id="infoIsoPaths">—</span></div>
+            <div class="info-row" id="infoDrillsRow" style="display:none"><span class="info-label">Drill holes</span><span class="info-value" id="infoDrills">—</span></div>
             <hr class="section-divider">
         </div>
 
@@ -315,8 +353,9 @@
     let copperSegments  = [];  // [{x1,y1,x2,y2,r}] — D01 strokes (older Gerber style)
     let copperFlashes   = [];  // [{x,y,ap:{type,w,h}}] — D03 flashes (older Gerber style)
     let copperRegions   = [];  // [[{x,y}]] — G36/G37 filled polygon regions (KiCad 6+ style)
-    let copperToolpaths = [];  // [[{x,y}]] — isolation polylines (all passes combined)
+    let copperToolpaths = [];  // [[[{x,y}]]] — isolation polylines grouped by pass
     let copperBounds    = null; // bounding box of copper layer (used when no edge cuts loaded)
+    let drillHits       = [];  // [{x,y,r}] — drill positions in world coords (mm)
 
     let parsedContours = [];   // [{x,y}[]] — all closed contours from Gerber (Y-down coords)
     let outerContour   = null; // Largest contour = board perimeter
@@ -364,6 +403,11 @@
     const copperFilenameEl  = document.getElementById('copperFilename');
     const copperErrorMsg    = document.getElementById('copperErrorMsg');
     const isolationSection  = document.getElementById('isolationSection');
+    const drillDropZone     = document.getElementById('drillDropZone');
+    const drillFileInput    = document.getElementById('drillFileInput');
+    const drillFilenameEl   = document.getElementById('drillFilename');
+    const drillErrorMsg     = document.getElementById('drillErrorMsg');
+    const drillSection      = document.getElementById('drillSection');
     const tabModeBtn     = document.getElementById('tabModeBtn');
     const tabList        = document.getElementById('tabList');
     const tabHint        = document.getElementById('tabHint');
@@ -1068,7 +1112,7 @@
             boardArea = Math.abs(ClipperLib.Clipper.Area(boardClipPath));
         }
 
-        const paths = [];
+        const passPaths = []; // [[[{x,y}]]] — one entry per pass, each entry is an array of loops
         for (let p = 0; p < numPasses; p++) {
             const expandBy = toolDiam / 2 + isoWidth + p * stepover;
             const co = new ClipperLib.ClipperOffset(2.0, CLIPPER_ARC_TOL);
@@ -1091,20 +1135,18 @@
                 ClipperLib.PolyFillType.pftNonZero
             );
 
-            let added = 0;
+            const thisPass = [];
             for (const cpoly of freeArea) {
                 if (cpoly.length < 3) continue;
-                // Skip the board/bbox outline: the largest outer polygon whose area is close
-                // to the full boundary area.  Everything smaller is a genuine mill path.
                 const a = Math.abs(ClipperLib.Clipper.Area(cpoly));
                 if (a > 0.5 * boardArea) continue;
-                paths.push(fromClipper(cpoly));
-                added++;
+                thisPass.push(fromClipper(cpoly));
             }
 
-            if (added === 0) break; // Board fully cleared — stop.
+            if (!thisPass.length) break; // Board fully cleared — stop.
+            passPaths.push(thisPass);
         }
-        return paths;
+        return passPaths;
     }
 
     // =========================================================
@@ -1246,24 +1288,27 @@
         ctx.translate(viewOffX, viewOffY);
         ctx.scale(viewScale, viewScale);
 
-        // Isolation toolpaths — drawn as a stroke with the actual tool diameter width
-        // Each path is the tool CENTER path (running to the SIDE of each trace, not through it)
+        // Isolation toolpaths — coloured by pass (red → yellow → green → blue)
         if (copperToolpaths.length) {
-            const toolDiam = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
-            ctx.strokeStyle = 'rgba(220, 180, 30, 0.85)';
-            ctx.lineWidth   = toolDiam;  // world-space width = actual cut width
-            ctx.lineCap     = 'round';
-            ctx.lineJoin    = 'round';
-            for (const path of copperToolpaths) {
-                if (path.length < 2) continue;
-                ctx.beginPath();
-                ctx.moveTo(path[0].x, path[0].y);
-                for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
-                ctx.closePath();
-                ctx.stroke();
-            }
-            ctx.lineCap   = 'butt';
-            ctx.lineJoin  = 'miter';
+            const toolDiam  = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
+            const numPasses = copperToolpaths.length;
+            ctx.lineWidth = toolDiam;
+            ctx.lineCap   = 'round';
+            ctx.lineJoin  = 'round';
+            copperToolpaths.forEach((passLoops, passIdx) => {
+                const hue = numPasses > 1 ? Math.round((passIdx / (numPasses - 1)) * 240) : 30;
+                ctx.strokeStyle = `hsla(${hue}, 90%, 58%, 0.85)`;
+                for (const path of passLoops) {
+                    if (path.length < 2) continue;
+                    ctx.beginPath();
+                    ctx.moveTo(path[0].x, path[0].y);
+                    for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
+                    ctx.closePath();
+                    ctx.stroke();
+                }
+            });
+            ctx.lineCap  = 'butt';
+            ctx.lineJoin = 'miter';
         }
 
         // Copper — regions (KiCad 6+ polygon fills), then strokes, then flashes
@@ -1300,6 +1345,23 @@
         // Board outline (blue)
         for (const contour of parsedContours) {
             drawPolyline(contour, '#4a90d9', 1);
+        }
+
+        // Drill hits — purple circles + crosses
+        if (drillHits.length) {
+            ctx.strokeStyle = '#a78bfa';
+            ctx.lineWidth   = 0.05;
+            ctx.lineCap     = 'round';
+            for (const hit of drillHits) {
+                ctx.beginPath();
+                ctx.arc(hit.x, hit.y, hit.r, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(hit.x - hit.r, hit.y); ctx.lineTo(hit.x + hit.r, hit.y);
+                ctx.moveTo(hit.x, hit.y - hit.r); ctx.lineTo(hit.x, hit.y + hit.r);
+                ctx.stroke();
+            }
+            ctx.lineCap = 'butt';
         }
 
         // Toolpath (red — offset from board edge by tool radius)
@@ -1397,12 +1459,15 @@
     }
 
     // Emit G-code lines for all isolation toolpaths.
+    // paths is [[[{x,y}]]] grouped by pass — flatten to a single ordered list first.
     function emitIsolationLines(lines, paths, copperDepth, safeZ, feedRate, plungeRate, f) {
         if (!paths.length) return;
+        const allPaths = paths.flat(1).filter(p => p.length >= 2);
+        if (!allPaths.length) return;
         lines.push('');
         lines.push('; === ISOLATION ROUTING ===');
         // Sort loops nearest-neighbor from origin to cut rapid-travel moves.
-        const sorted = sortPathsNearestNeighbor(paths.filter(p => p.length >= 2), 0, 0);
+        const sorted = sortPathsNearestNeighbor(allPaths, 0, 0);
         for (const path of sorted) {
             const start = toGC(path[0]);
             lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
@@ -1508,11 +1573,12 @@
 
         const hasIsolation = copperToolpaths.length > 0;
         const hasEdgeCuts  = !!toolpath;
+        const hasDrills    = drillHits.length > 0;
 
         if (hasIsolation) {
             const isoDepth    = parseFloat(document.getElementById('isoDepth').value);
             const isoFeedRate = parseInt(document.getElementById('isoFeedRate').value);
-            lines.push(`; Isolation routing: ${copperToolpaths.length} paths, Z${isoDepth} mm at ${isoFeedRate} mm/min`);
+            lines.push(`; Isolation routing: ${copperToolpaths.flat(1).length} paths (${copperToolpaths.length} passes), Z${isoDepth} mm at ${isoFeedRate} mm/min`);
         }
         if (hasEdgeCuts) {
             const cutDepth  = parseFloat(document.getElementById('cutDepth').value);
@@ -1557,6 +1623,13 @@
                 lines.push(`; === Pass ${i + 1}/${passes.length}: Z${f(passZ)}${useTabs ? ' (tabs)' : ''} ===`);
                 emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f);
             });
+        }
+
+        // Drilling — after edge cuts so the board is still fixtured
+        if (hasDrills) {
+            const drillDepth    = parseFloat(document.getElementById('drillDepth').value);
+            const drillFeedRate = parseInt(document.getElementById('drillFeedRate').value);
+            emitDrillLines(lines, drillHits, drillDepth, safeZ, drillFeedRate, plungeRate, f);
         }
 
         lines.push('');
@@ -1664,7 +1737,7 @@
                 generateBtn.disabled = false;
 
                 infoTraces.textContent    = segments.length + flashes.length + regions.length;
-                infoIsoPaths.textContent  = copperToolpaths.length;
+                infoIsoPaths.textContent  = copperToolpaths.flat(1).length + ' (' + copperToolpaths.length + ' passes)';
                 document.getElementById('infoTracesRow').style.display   = '';
                 document.getElementById('infoIsoPathsRow').style.display = '';
 
@@ -1678,10 +1751,109 @@
         reader.readAsText(file);
     }
 
+    // =========================================================
+    // === DRILL FILE PARSER
+    // =========================================================
+
+    // Parse an Excellon drill file (.drl / .xln) and return [{x, y, r}] in mm.
+    // Handles KiCad's default METRIC,LZ export (integer coords / 1000 → mm)
+    // as well as files that already use decimal mm coordinates.
+    function parseDrillFile(text) {
+        const hits  = [];
+        const tools = {}; // toolNum → radius (mm)
+        let currentTool = 1;
+        let inHeader    = false;
+        let divisor     = 1000; // default: METRIC with 3 decimal places
+
+        for (const rawLine of text.split('\n')) {
+            const line = rawLine.trim();
+            if (!line || line.startsWith(';')) continue;
+
+            if (line === 'M48') { inHeader = true; continue; }
+            if (line === '%' || line === 'M95') { inHeader = false; continue; }
+
+            // Tool definition with diameter: T1C0.800 or T01C1.000
+            const toolDef = line.match(/^T(\d+)[^C\n]*C([\d.]+)/i);
+            if (toolDef) {
+                tools[parseInt(toolDef[1])] = parseFloat(toolDef[2]) / 2;
+                if (!inHeader) currentTool = parseInt(toolDef[1]);
+                continue;
+            }
+
+            // Metric / inch mode
+            if (/^METRIC/i.test(line) || line === 'M71') { divisor = 1000;  continue; }
+            if (/^INCH/i.test(line)   || line === 'M72') { divisor = 10000; continue; }
+
+            if (inHeader) continue;
+
+            // Tool select (no diameter = select only): T1
+            const toolSel = line.match(/^T(\d+)$/);
+            if (toolSel) { currentTool = parseInt(toolSel[1]); continue; }
+
+            // Drill hit: X...Y... (either or both axes)
+            if (/^[XY]/.test(line)) {
+                const xm = line.match(/X([+-]?\d+(?:\.\d+)?)/);
+                const ym = line.match(/Y([+-]?\d+(?:\.\d+)?)/);
+                if (!xm && !ym) continue;
+                let x = xm ? parseFloat(xm[1]) : 0;
+                let y = ym ? parseFloat(ym[1]) : 0;
+                // Apply divisor only when no decimal point (integer Excellon format)
+                if (xm && !xm[1].includes('.')) x /= divisor;
+                if (ym && !ym[1].includes('.')) y /= divisor;
+                const r = (tools[currentTool] != null) ? tools[currentTool] : 0.4;
+                hits.push({ x, y: -y, r }); // negate Y to match Gerber Y-down convention
+            }
+        }
+        return hits;
+    }
+
+    function loadDrillFile(file) {
+        drillErrorMsg.textContent = '';
+        const reader = new FileReader();
+        reader.onload = e => {
+            try {
+                const hits = parseDrillFile(e.target.result);
+                if (!hits.length) {
+                    drillErrorMsg.textContent = 'No drill hits found — is this an Excellon drill file?';
+                    return;
+                }
+                drillHits = hits;
+                drillDropZone.classList.add('drill-loaded');
+                drillFilenameEl.textContent = file.name;
+                show(drillSection);
+                show(infoSection);
+                generateBtn.disabled = false;
+                document.getElementById('infoDrillsRow').style.display = '';
+                document.getElementById('infoDrills').textContent = hits.length;
+                if (!boardBounds && !copperBounds) fitView();
+                drawPreview();
+            } catch (err) {
+                drillErrorMsg.textContent = 'Parse error: ' + err.message;
+                console.error(err);
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    // Emit G-code drill plunge loops (explicit Z-plunge; no G81 — GRBL compatibility).
+    function emitDrillLines(lines, hits, drillDepth, safeZ, feedRate, plungeRate, f) {
+        if (!hits.length) return;
+        lines.push('');
+        lines.push(`; === DRILLING (${hits.length} holes) ===`);
+        // Nearest-neighbor sort — wrap each hit as a single-point "path" for the sorter.
+        const sorted = sortPathsNearestNeighbor(hits.map(h => [h]), 0, 0);
+        for (const [hit] of sorted) {
+            const pt = toGC(hit);
+            lines.push(`G0 X${f(pt.x)} Y${f(pt.y)}`);
+            lines.push(`G1 Z${f(drillDepth)} F${feedRate}  ; drill`);
+            lines.push(`G0 Z${f(safeZ)}  ; retract`);
+        }
+    }
+
     function rebuildIsolation() {
         if (!copperSegments.length && !copperFlashes.length && !copperRegions.length) return;
         copperToolpaths = buildIsolationToolpaths(copperSegments, copperFlashes, copperRegions);
-        infoIsoPaths.textContent = copperToolpaths.length;
+        infoIsoPaths.textContent = copperToolpaths.flat(1).length + ' (' + copperToolpaths.length + ' passes)';
         drawPreview();
     }
 
@@ -1839,6 +2011,18 @@
         if (file) loadCopperFile(file);
     });
     copperFileInput.addEventListener('change', e => { if (e.target.files[0]) loadCopperFile(e.target.files[0]); });
+
+    // Drill file drop zone
+    drillDropZone.addEventListener('click', () => drillFileInput.click());
+    drillDropZone.addEventListener('dragover', e => { e.preventDefault(); drillDropZone.classList.add('drag-over'); });
+    drillDropZone.addEventListener('dragleave', () => drillDropZone.classList.remove('drag-over'));
+    drillDropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        drillDropZone.classList.remove('drag-over');
+        const file = e.dataTransfer.files[0];
+        if (file) loadDrillFile(file);
+    });
+    drillFileInput.addEventListener('change', e => { if (e.target.files[0]) loadDrillFile(e.target.files[0]); });
 
     // Isolation parameter changes → rebuild toolpaths
     ['isoWidth', 'isoToolDiam', 'isoPasses', 'isoOverlap'].forEach(id => {

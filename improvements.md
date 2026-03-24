@@ -38,13 +38,13 @@ Use a higher feed rate for rapid-travel segments between isolation loops (curren
 
 ## Drill Files
 
-### Excellon drill file support
-Parse `.drl` / `.xln` Excellon files to generate drill G-code (`G81` canned cycles or explicit plunge loops for GRBL). Display drill hits as crosses on the canvas overlay. This completes the basic PCB-to-CNC workflow.
+### ~~Excellon drill file support~~ ✓ done
+~~Parse `.drl` / `.xln` Excellon files to generate drill G-code (`G81` canned cycles or explicit plunge loops for GRBL). Display drill hits as crosses on the canvas overlay. This completes the basic PCB-to-CNC workflow.~~
 
 ## UX
 
-### Preview: show isolation paths coloured by pass
-Draw pass 1 paths in one colour, pass 2 in another, etc., so the user can see how much copper is being cleared per pass.
+### ~~Preview: show isolation paths coloured by pass~~ ✓ done
+~~Draw pass 1 paths in one colour, pass 2 in another, etc., so the user can see how much copper is being cleared per pass.~~
 
 ### Preview: toggle copper / isolation / edge-cuts layers
 Checkboxes to show/hide each layer in the canvas preview.
