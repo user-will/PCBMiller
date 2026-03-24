@@ -1804,7 +1804,7 @@ self.onmessage = function(e) {
     function rebuildIsolation() {
         if (!copperSegments.length && !copperFlashes.length && !copperRegions.length) return;
         clearTimeout(_isoDebounceTimer);
-        document.getElementById('isoComputingMsg').style.display = '';
+        document.getElementById('isoComputingMsg').style.display = 'block';
         _isoDebounceTimer = setTimeout(() => {
             const toolDiam   = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
             const overlapPct = parseFloat(document.getElementById('isoOverlap').value) || 50;
