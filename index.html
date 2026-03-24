@@ -73,6 +73,7 @@
         .info-label { color: #888; }
         .info-value { color: #eee; }
         .hint { font-size: 0.75rem; color: #555; margin-top: 4px; }
+        .computing-msg { font-size: 0.75rem; color: #f5a623; margin-top: 6px; display: none; }
         .error { font-size: 0.8rem; color: #e94560; margin-top: 6px; }
         textarea {
             width: 100%; height: 160px; background: #1a1a2e; color: #4ade80;
@@ -181,6 +182,7 @@
                     <span class="unit">mm/min</span>
                 </div>
             </div>
+            <div class="computing-msg" id="isoComputingMsg">Computing paths…</div>
             <hr class="section-divider">
         </div>
 
@@ -898,6 +900,126 @@
 
     // Clipper integer scale: 1 mm = CLIPPER_SCALE units (1 nm precision)
     const CLIPPER_SCALE = 1e6;
+
+    // ---- Web Worker source (runs Clipper off the main thread) ----
+    // All geometry helpers are duplicated inside the string so the worker is self-contained.
+    const ISO_WORKER_SRC = `
+'use strict';
+importScripts('https://cdn.jsdelivr.net/npm/clipper-lib@6.4.2/clipper.js');
+var CLIPPER_SCALE = 1e6;
+var CLIPPER_ARC_TOL = CLIPPER_SCALE * 0.01;
+function toClipper(pts) {
+    return pts.map(function(p) { return { X: Math.round(p.x * CLIPPER_SCALE), Y: Math.round(p.y * CLIPPER_SCALE) }; });
+}
+function fromClipper(cpoly) {
+    return cpoly.map(function(p) { return { x: p.X / CLIPPER_SCALE, y: p.Y / CLIPPER_SCALE }; });
+}
+function circlePoints(cx, cy, r, n) {
+    return Array.from({ length: n || 24 }, function(_, i) {
+        return { x: cx + r * Math.cos(2 * Math.PI * i / n), y: cy + r * Math.sin(2 * Math.PI * i / n) };
+    });
+}
+function stadiumBuffer(x1, y1, x2, y2, d) {
+    var dx = x2 - x1, dy = y2 - y1, len = Math.sqrt(dx*dx + dy*dy);
+    if (len < 0.001) return circlePoints(x1, y1, d, 24);
+    var nx = -dy/len, ny = dx/len, a0 = Math.atan2(ny, nx), CAP = 8, pts = [];
+    for (var i = 0; i <= CAP; i++) { var a = a0 - Math.PI*i/CAP; pts.push({ x: x2+d*Math.cos(a), y: y2+d*Math.sin(a) }); }
+    pts.push({ x: x1-nx*d, y: y1-ny*d });
+    for (var i = 1; i < CAP; i++) { var a = (a0+Math.PI) - Math.PI*i/CAP; pts.push({ x: x1+d*Math.cos(a), y: y1+d*Math.sin(a) }); }
+    return pts;
+}
+function flashBuffer(cx, cy, ap, offset) {
+    var hw = ap.w/2+offset, hh = (ap.h||ap.w)/2+offset;
+    if (ap.type === 'C') return circlePoints(cx, cy, ap.w/2+offset, 24);
+    if (ap.type === 'O') {
+        var r = Math.min(hw,hh), rx = hw-r, ry = hh-r, N = 8, pts = [];
+        [{cx:cx+rx,cy:cy+ry,a0:0},{cx:cx-rx,cy:cy+ry,a0:Math.PI/2},{cx:cx-rx,cy:cy-ry,a0:Math.PI},{cx:cx+rx,cy:cy-ry,a0:3*Math.PI/2}]
+        .forEach(function(c) { for (var i=0;i<N;i++) pts.push({ x:c.cx+r*Math.cos(c.a0+Math.PI/2*i/(N-1)), y:c.cy+r*Math.sin(c.a0+Math.PI/2*i/(N-1)) }); });
+        return pts;
+    }
+    return [{x:cx-hw,y:cy-hh},{x:cx+hw,y:cy-hh},{x:cx+hw,y:cy+hh},{x:cx-hw,y:cy+hh}];
+}
+function buildIsolationToolpaths(segments, flashes, regions, params, boardOutline) {
+    var toolDiam=params.toolDiam, isoWidth=params.isoWidth, numPasses=params.numPasses, stepover=params.stepover;
+    var copperPolys = [];
+    for (var i=0;i<segments.length;i++) { var s=segments[i]; if (s.r>0) copperPolys.push(toClipper(stadiumBuffer(s.x1,s.y1,s.x2,s.y2,s.r))); }
+    for (var i=0;i<flashes.length;i++) { var f=flashes[i]; copperPolys.push(toClipper(flashBuffer(f.x,f.y,f.ap,0))); }
+    for (var i=0;i<regions.length;i++) { var rg=regions[i]; if (rg.length>=3) copperPolys.push(toClipper(rg)); }
+    if (!copperPolys.length) return [];
+    var clipper = new ClipperLib.Clipper();
+    clipper.AddPaths(copperPolys, ClipperLib.PolyType.ptSubject, true);
+    var united = new ClipperLib.Paths();
+    clipper.Execute(ClipperLib.ClipType.ctUnion, united, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+    var boardClipPath = null, boardArea = 0;
+    if (boardOutline && boardOutline.length >= 3) {
+        boardClipPath = toClipper(boardOutline);
+    } else {
+        var margin = CLIPPER_SCALE, minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+        for (var i=0;i<united.length;i++) for (var j=0;j<united[i].length;j++) {
+            var pt=united[i][j];
+            if (pt.X<minX) minX=pt.X; if (pt.Y<minY) minY=pt.Y;
+            if (pt.X>maxX) maxX=pt.X; if (pt.Y>maxY) maxY=pt.Y;
+        }
+        if (isFinite(minX)) boardClipPath = [{X:minX-margin,Y:minY-margin},{X:maxX+margin,Y:minY-margin},{X:maxX+margin,Y:maxY+margin},{X:minX-margin,Y:maxY+margin}];
+    }
+    if (boardClipPath) boardArea = Math.abs(ClipperLib.Clipper.Area(boardClipPath));
+    var paths = [];
+    for (var p=0; p<numPasses; p++) {
+        var expandBy = toolDiam/2 + isoWidth + p*stepover;
+        var co = new ClipperLib.ClipperOffset(2.0, CLIPPER_ARC_TOL);
+        co.AddPaths(united, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
+        var expanded = new ClipperLib.Paths();
+        co.Execute(expanded, expandBy * CLIPPER_SCALE);
+        if (!expanded.length) break;
+        if (!boardClipPath) break;
+        var dc = new ClipperLib.Clipper();
+        dc.AddPath(boardClipPath, ClipperLib.PolyType.ptSubject, true);
+        dc.AddPaths(expanded, ClipperLib.PolyType.ptClip, true);
+        var freeArea = new ClipperLib.Paths();
+        dc.Execute(ClipperLib.ClipType.ctDifference, freeArea, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+        var added = 0;
+        for (var k=0;k<freeArea.length;k++) {
+            var cpoly=freeArea[k]; if (cpoly.length<3) continue;
+            var a=Math.abs(ClipperLib.Clipper.Area(cpoly)); if (a>0.5*boardArea) continue;
+            paths.push(fromClipper(cpoly)); added++;
+        }
+        if (added===0) break;
+    }
+    return paths;
+}
+self.onmessage = function(e) {
+    self.postMessage(buildIsolationToolpaths(e.data.segments, e.data.flashes, e.data.regions, e.data.params, e.data.boardOutline));
+};
+`;
+
+    // Worker instance + debounce timer.
+    let _isoWorker = null;
+    let _isoDebounceTimer = null;
+
+    function _getIsoWorker() {
+        if (_isoWorker) return _isoWorker;
+        const blob = new Blob([ISO_WORKER_SRC], { type: 'application/javascript' });
+        _isoWorker = new Worker(URL.createObjectURL(blob));
+        _isoWorker.onmessage = e => {
+            copperToolpaths = e.data;
+            infoIsoPaths.textContent = copperToolpaths.length;
+            document.getElementById('isoComputingMsg').style.display = 'none';
+            drawPreview();
+        };
+        _isoWorker.onerror = err => {
+            console.error('Isolation worker error:', err);
+            document.getElementById('isoComputingMsg').textContent = 'Error — check console';
+        };
+        return _isoWorker;
+    }
+
+    // rAF-throttled redraw — prevents >60fps canvas repaints during pan/zoom.
+    let _rafPending = false;
+    function scheduleRedraw() {
+        if (_rafPending) return;
+        _rafPending = true;
+        requestAnimationFrame(() => { _rafPending = false; drawPreview(); });
+    }
     // Arc tolerance for ClipperOffset (in Clipper units) — 0.01 mm
     const CLIPPER_ARC_TOL = CLIPPER_SCALE * 0.01;
 
@@ -1634,7 +1756,8 @@
                 copperSegments  = segments;
                 copperFlashes   = flashes;
                 copperRegions   = regions;
-                copperToolpaths = buildIsolationToolpaths(segments, flashes, regions);
+                copperToolpaths = [];
+                rebuildIsolation(); // async — worker will call drawPreview when done
 
                 // Compute bounding box of all copper geometry
                 let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -1680,9 +1803,24 @@
 
     function rebuildIsolation() {
         if (!copperSegments.length && !copperFlashes.length && !copperRegions.length) return;
-        copperToolpaths = buildIsolationToolpaths(copperSegments, copperFlashes, copperRegions);
-        infoIsoPaths.textContent = copperToolpaths.length;
-        drawPreview();
+        clearTimeout(_isoDebounceTimer);
+        document.getElementById('isoComputingMsg').style.display = '';
+        _isoDebounceTimer = setTimeout(() => {
+            const toolDiam   = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
+            const overlapPct = parseFloat(document.getElementById('isoOverlap').value) || 50;
+            _getIsoWorker().postMessage({
+                segments:    copperSegments,
+                flashes:     copperFlashes,
+                regions:     copperRegions,
+                boardOutline: outerContour || null,
+                params: {
+                    toolDiam,
+                    isoWidth:  parseFloat(document.getElementById('isoWidth').value) || 0.2,
+                    numPasses: parseInt(document.getElementById('isoPasses').value) || 2,
+                    stepover:  toolDiam * (1 - overlapPct / 100),
+                },
+            });
+        }, 350);
     }
 
     // =========================================================
@@ -1700,7 +1838,7 @@
             viewOffX = mx - (mx - viewOffX) * factor;
             viewOffY = my - (my - viewOffY) * factor;
             viewScale = Math.max(0.5, Math.min(viewScale * factor, 500));
-            drawPreview();
+            scheduleRedraw();
         }, { passive: false });
 
         // Click — place tab if in tab mode, otherwise start pan
@@ -1730,7 +1868,7 @@
             viewOffY += e.clientY - panLastY;
             panLastX = e.clientX;
             panLastY = e.clientY;
-            drawPreview();
+            scheduleRedraw();
         });
 
         window.addEventListener('mouseup', () => {
