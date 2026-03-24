@@ -2,8 +2,8 @@
 
 ## Isolation Routing
 
-### Nearest-neighbor path ordering
-Currently Clipper returns isolation loops in arbitrary order, causing unnecessary rapid-travel moves between distant loops. A simple nearest-neighbor sort (pick next loop whose start point is closest to current tool position) would reduce air-time significantly on boards with many traces.
+### ~~Nearest-neighbor path ordering~~ ✓ done
+~~Currently Clipper returns isolation loops in arbitrary order, causing unnecessary rapid-travel moves between distant loops. A simple nearest-neighbor sort (pick next loop whose start point is closest to current tool position) would reduce air-time significantly on boards with many traces.~~
 
 ### Voronoi clipping (pcb2gcode approach)
 Build a Voronoi diagram treating each copper shape as a site. Clip each trace's isolation path to its Voronoi cell so the tool never re-mills copper already cleared by an adjacent trace's path. Minimises total copper removal and prevents double-cutting in tight areas.
@@ -22,8 +22,8 @@ Unknown aperture macros are currently approximated as rectangles using the first
 
 ## Edge Cuts
 
-### Clipper-based edge-cuts offset
-`offsetPolygon` for the board outline still uses the vertex-bisector method, which misbehaves on non-convex board shapes (L-shaped, tabbed, or notched boards). Replacing it with ClipperOffset (already loaded) would handle all shapes correctly.
+### ~~Clipper-based edge-cuts offset~~ ✓ done
+~~`offsetPolygon` for the board outline still uses the vertex-bisector method, which misbehaves on non-convex board shapes (L-shaped, tabbed, or notched boards). Replacing it with ClipperOffset (already loaded) would handle all shapes correctly.~~
 
 ### Arc support in edge-cuts Gerber
 Curved board edges (G02/G03) are silently ignored by the Gerber parser and will produce straight chord approximations. Same fix as the isolation arc support above.
@@ -33,8 +33,8 @@ Curved board edges (G02/G03) are silently ignored by the Gerber parser and will 
 ### Feed-rate optimisation
 Use a higher feed rate for rapid-travel segments between isolation loops (currently all motion uses the same feed). Emit `G0` for rapids with safe-Z retract, which is already done, but also consider reducing plunge rate only on the first plunge per loop.
 
-### GRBL spindle warm-up delay
-The Genmitsu 3018 spindle needs a moment to reach speed after `M3`. Add a configurable dwell (`G4 P<seconds>`) after `M3` before the first cut move. Currently the tool can contact the board before the spindle is at speed.
+### ~~GRBL spindle warm-up delay~~ ✓ done
+~~The Genmitsu 3018 spindle needs a moment to reach speed after `M3`. Add a configurable dwell (`G4 P<seconds>`) after `M3` before the first cut move. Currently the tool can contact the board before the spindle is at speed.~~
 
 ## Drill Files
 

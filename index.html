@@ -240,6 +240,14 @@
                 </div>
                 <div class="hint">Machine max: 1000 RPM</div>
             </div>
+            <div class="input-group">
+                <label>Spindle Warm-up Delay</label>
+                <div class="input-row">
+                    <input type="number" id="spindleDelay" value="3" step="1" min="0" max="30">
+                    <span class="unit">sec</span>
+                </div>
+                <div class="hint">Dwell after M3 before first cut</div>
+            </div>
             <hr class="section-divider">
         </div>
 
@@ -850,33 +858,21 @@
         return sum / 2;
     }
 
-    // Offset a polygon outward by distance d (vertex-normal bisector method).
+    // Offset a closed polygon inward by distance d using ClipperOffset (round joins).
+    // Replaces the old vertex-bisector method which misbehaved on non-convex shapes.
     function offsetPolygon(points, d) {
         if (Math.abs(d) < 0.0001) return points.map(p => ({ ...p }));
-        let pts = points;
-        if (signedArea(pts) < 0) pts = pts.slice().reverse(); // normalize to CCW
-        const n = pts.length;
-        const result = [];
-        for (let i = 0; i < n; i++) {
-            const prev = pts[(i - 1 + n) % n];
-            const curr = pts[i];
-            const next = pts[(i + 1) % n];
-            const e1x = curr.x - prev.x, e1y = curr.y - prev.y;
-            const l1 = Math.sqrt(e1x * e1x + e1y * e1y);
-            const e2x = next.x - curr.x, e2y = next.y - curr.y;
-            const l2 = Math.sqrt(e2x * e2x + e2y * e2y);
-            if (l1 < 0.0001 || l2 < 0.0001) { result.push({ x: curr.x, y: curr.y }); continue; }
-            const n1x =  e1y / l1, n1y = -e1x / l1;
-            const n2x =  e2y / l2, n2y = -e2x / l2;
-            const bx = n1x + n2x, by = n1y + n2y;
-            const bl = Math.sqrt(bx * bx + by * by);
-            if (bl < 0.0001) { result.push({ x: curr.x + n1x * d, y: curr.y + n1y * d }); continue; }
-            const bux = bx / bl, buy = by / bl;
-            const dot = n1x * bux + n1y * buy;
-            const scale = dot > 0.1 ? d / dot : d * 10;
-            result.push({ x: curr.x + bux * scale, y: curr.y + buy * scale });
+        const co = new ClipperLib.ClipperOffset(2.0, CLIPPER_ARC_TOL);
+        co.AddPath(toClipper(points), ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
+        const result = new ClipperLib.Paths();
+        co.Execute(result, -d * CLIPPER_SCALE); // negative = shrink inward
+        if (!result.length) return points.map(p => ({ ...p }));
+        // Return the largest result polygon (handles cases where offset splits the shape).
+        let best = result[0];
+        for (const p of result) {
+            if (Math.abs(ClipperLib.Clipper.Area(p)) > Math.abs(ClipperLib.Clipper.Area(best))) best = p;
         }
-        return result;
+        return fromClipper(best);
     }
 
     // Return the contour with the largest absolute area (= board perimeter).
@@ -1379,22 +1375,42 @@
         };
     }
 
+    // Sort closed toolpath loops by nearest-neighbor to minimise rapid-travel distance.
+    // Starting from (cx, cy), repeatedly picks the loop whose first point is closest.
+    function sortPathsNearestNeighbor(paths, cx, cy) {
+        const remaining = paths.slice();
+        const sorted = [];
+        while (remaining.length) {
+            let bestIdx = 0, bestDist = Infinity;
+            for (let i = 0; i < remaining.length; i++) {
+                const p = remaining[i][0];
+                const dx = p.x - cx, dy = p.y - cy;
+                const dist = dx * dx + dy * dy;
+                if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+            }
+            const chosen = remaining.splice(bestIdx, 1)[0];
+            sorted.push(chosen);
+            const last = chosen[chosen.length - 1];
+            cx = last.x; cy = last.y;
+        }
+        return sorted;
+    }
+
     // Emit G-code lines for all isolation toolpaths.
     function emitIsolationLines(lines, paths, copperDepth, safeZ, feedRate, plungeRate, f) {
         if (!paths.length) return;
         lines.push('');
         lines.push('; === ISOLATION ROUTING ===');
-        for (let i = 0; i < paths.length; i++) {
-            const path = paths[i];
-            if (path.length < 2) continue;
+        // Sort loops nearest-neighbor from origin to cut rapid-travel moves.
+        const sorted = sortPathsNearestNeighbor(paths.filter(p => p.length >= 2), 0, 0);
+        for (const path of sorted) {
             const start = toGC(path[0]);
             lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
-            lines.push(`G1 Z${f(copperDepth)} F${plungeRate}  ; plunge into copper`);
+            lines.push(`G1 Z${f(copperDepth)} F${plungeRate}  ; plunge`);
             for (let j = 1; j < path.length; j++) {
                 const pt = toGC(path[j]);
                 lines.push(`G1 X${f(pt.x)} Y${f(pt.y)} F${feedRate}`);
             }
-            const end = toGC(path[path.length - 1]);
             lines.push(`G1 X${f(start.x)} Y${f(start.y)} F${feedRate}  ; close`);
             lines.push(`G0 Z${f(safeZ)}  ; retract`);
         }
@@ -1479,9 +1495,10 @@
         const bounds = boardBounds || copperBounds;
         if (!bounds) return '';
 
-        const safeZ      = parseFloat(document.getElementById('safeZ').value);
-        const plungeRate = parseInt(document.getElementById('plungeRate').value);
-        const spindleRpm = parseInt(document.getElementById('spindleRpm').value);
+        const safeZ        = parseFloat(document.getElementById('safeZ').value);
+        const plungeRate   = parseInt(document.getElementById('plungeRate').value);
+        const spindleRpm   = parseInt(document.getElementById('spindleRpm').value);
+        const spindleDelay = parseInt(document.getElementById('spindleDelay').value) || 0;
 
         const f = n => n.toFixed(3);
         const lines = [];
@@ -1510,6 +1527,7 @@
         lines.push('G90        ; absolute coordinates');
         lines.push('G17        ; XY plane');
         lines.push(`M3 S${spindleRpm}  ; spindle on`);
+        if (spindleDelay > 0) lines.push(`G4 P${spindleDelay}  ; wait for spindle to reach speed`);
         lines.push('');
         lines.push(`G0 Z${f(safeZ)}  ; move to safe height`);
 
