@@ -2198,9 +2198,9 @@ self.onmessage = function(e) {
     });
     copperFileInput.addEventListener('change', e => { if (e.target.files[0]) loadCopperFile(e.target.files[0]); });
 
-    // V-bit angle → auto-calculate depth, update hint, rebuild toolpaths
+    // V-bit angle → update visuals at current depth (don't overwrite depth)
     document.getElementById('vbitAngle').addEventListener('input', () => {
-        updateIsoDepthFromAngle();
+        updateIsoDepthHint();
         rebuildIsolation();
     });
 
