@@ -54,7 +54,9 @@
         .drop-zone:hover, .drop-zone.drag-over { border-color: #e94560; background: rgba(233,69,96,0.1); }
         .drop-zone.loaded { border-color: #4ade80; background: rgba(74,222,128,0.1); }
         .drop-zone.copper-loaded { border-color: #c8922a; background: rgba(200,146,42,0.1); }
+        .drop-zone.drill-loaded  { border-color: #5ba3f5; background: rgba(91,163,245,0.1); }
         .copper-filename { font-size: 0.8rem; color: #c8922a; margin-top: 8px; word-break: break-all; }
+        .drill-filename  { font-size: 0.8rem; color: #5ba3f5; margin-top: 8px; word-break: break-all; }
         .drop-zone-text { font-size: 0.9rem; color: #888; }
         .filename { font-size: 0.8rem; color: #4ade80; margin-top: 8px; word-break: break-all; }
         .input-group { margin-bottom: 10px; }
@@ -120,6 +122,14 @@
         .tab-remove { background: none; border: none; color: #e94560; cursor: pointer;
             font-size: 1rem; padding: 0 4px; width: auto; font-weight: bold; }
         .tab-remove:hover { color: #ff6b85; }
+        .output-mode-row { display: flex; gap: 6px; margin-bottom: 10px; }
+        .output-mode-opt {
+            flex: 1; padding: 7px 4px; border: 1px solid #444; border-radius: 6px;
+            cursor: pointer; font-size: 0.8rem; color: #888; background: #1a1a2e;
+            text-align: center; user-select: none;
+        }
+        .output-mode-opt input[type="radio"] { display: none; }
+        .output-mode-opt:has(input:checked) { border-color: #e94560; color: #eee; }
     </style>
 </head>
 <body>
@@ -152,6 +162,18 @@
             <div class="error" id="copperErrorMsg"></div>
         </div>
 
+        <!-- Drill File (optional) -->
+        <div>
+            <h2>Drill File <span style="color:#555;font-size:0.7rem;text-transform:none">(optional)</span></h2>
+            <div class="drop-zone" id="drillDropZone">
+                <div class="drop-zone-text">Drop .drl / .exc / PTH.drl</div>
+                <div class="drill-filename" id="drillFilename"></div>
+            </div>
+            <input type="file" id="drillFileInput" accept=".drl,.exc,.xln,.ncd,.drd,.txt">
+            <div class="hint">KiCad: PCB Editor → File → Fabrication Outputs → Drill Files</div>
+            <div class="error" id="drillErrorMsg"></div>
+        </div>
+
         <!-- Isolation parameters (shown after copper file loads) -->
         <div id="isolationSection" class="hidden">
             <h2>Isolation Routing</h2>
@@ -182,7 +204,7 @@
             <div class="input-group">
                 <label>Copper Cut Depth</label>
                 <div class="input-row">
-                    <input type="number" id="isoDepth" value="-0.05" step="0.001" max="0">
+                    <input type="number" id="isoDepth" value="-0.1" step="0.001" max="0">
                     <span class="unit">mm</span>
                 </div>
                 <div class="hint" id="isoDepthHint">0.035 mm = 1oz copper thickness</div>
@@ -247,6 +269,31 @@
                     <span class="unit">sec</span>
                 </div>
                 <div class="hint">Dwell after M3 before first cut</div>
+            </div>
+            <hr class="section-divider">
+        </div>
+
+        <!-- Drilling Parameters (shown after drill file loads) -->
+        <div id="drillSection" class="hidden">
+            <h2>Drilling</h2>
+            <div class="input-group">
+                <label>Required Drill Bits</label>
+                <div id="drillBitList" style="font-size:0.82rem;color:#ccc;line-height:1.7"></div>
+            </div>
+            <div class="input-group">
+                <label>Drill Depth</label>
+                <div class="input-row">
+                    <input type="number" id="drillDepth" value="-1.8" step="0.1" max="0">
+                    <span class="unit">mm</span>
+                </div>
+                <div class="hint">Board thickness + ~0.2 mm clearance</div>
+            </div>
+            <div class="input-group">
+                <label>Drill Feed Rate</label>
+                <div class="input-row">
+                    <input type="number" id="drillFeedRate" value="60" step="10" min="1" max="600">
+                    <span class="unit">mm/min</span>
+                </div>
             </div>
             <hr class="section-divider">
         </div>
@@ -319,7 +366,22 @@
             <div class="info-row"><span class="info-label">Passes</span><span class="info-value" id="infoPasses">—</span></div>
             <div class="info-row" id="infoTracesRow" style="display:none"><span class="info-label">Traces</span><span class="info-value" id="infoTraces">—</span></div>
             <div class="info-row" id="infoIsoPathsRow" style="display:none"><span class="info-label">Iso paths</span><span class="info-value" id="infoIsoPaths">—</span></div>
+            <div class="info-row" id="infoDrillRow" style="display:none"><span class="info-label">Drill holes</span><span class="info-value" id="infoDrillCount">—</span></div>
             <hr class="section-divider">
+        </div>
+
+        <!-- Output mode (shown once any file is loaded) -->
+        <div id="outputModeSection" class="hidden">
+            <div class="output-mode-row">
+                <label class="output-mode-opt">
+                    <input type="radio" name="outputMode" id="modeCombined" value="combined" checked>
+                    Combined file
+                </label>
+                <label class="output-mode-opt">
+                    <input type="radio" name="outputMode" id="modeSeparate" value="separate">
+                    Separate files
+                </label>
+            </div>
         </div>
 
         <button class="btn-primary" id="generateBtn" disabled>Generate G-code</button>
@@ -331,6 +393,9 @@
             <div class="btn-row" style="margin-top: 8px;">
                 <button class="btn-secondary" id="copyBtn">Copy</button>
                 <button class="btn-secondary" id="downloadBtn">Download .nc</button>
+                <button class="btn-secondary hidden" id="downloadTracesBtn">Traces.nc</button>
+                <button class="btn-secondary hidden" id="downloadDrillBtn">Drill.nc</button>
+                <button class="btn-secondary hidden" id="downloadOutlineBtn">Outline.nc</button>
             </div>
         </div>
     </div>
@@ -362,6 +427,11 @@
     let tabs           = [];   // [{t, width}] t = 0..1 normalized arc length
     let tabModeActive  = false;
     let gcodeText      = '';
+    let drillHoles     = [];   // [{x, y, diam}] — from Excellon drill file
+    let gcBounds       = null; // set at start of generateGcode() so all ops share one origin
+    let gcodeTraces    = '';   // separate-mode: isolation routing GCode
+    let gcodeDrill     = '';   // separate-mode: drilling GCode
+    let gcodeOutline   = '';   // separate-mode: edge cuts GCode
 
     // Canvas pan/zoom
     let viewScale = 10;
@@ -396,11 +466,22 @@
     const infoPasses     = document.getElementById('infoPasses');
     const infoTraces     = document.getElementById('infoTraces');
     const infoIsoPaths   = document.getElementById('infoIsoPaths');
+    const infoDrillCount = document.getElementById('infoDrillCount');
     const copperDropZone    = document.getElementById('copperDropZone');
     const copperFileInput   = document.getElementById('copperFileInput');
     const copperFilenameEl  = document.getElementById('copperFilename');
     const copperErrorMsg    = document.getElementById('copperErrorMsg');
+    const drillDropZone     = document.getElementById('drillDropZone');
+    const drillFileInput    = document.getElementById('drillFileInput');
+    const drillFilenameEl   = document.getElementById('drillFilename');
+    const drillErrorMsg     = document.getElementById('drillErrorMsg');
     const isolationSection  = document.getElementById('isolationSection');
+    const drillSection      = document.getElementById('drillSection');
+    const outputModeSection = document.getElementById('outputModeSection');
+    const modeCombined      = document.getElementById('modeCombined');
+    const downloadTracesBtn = document.getElementById('downloadTracesBtn');
+    const downloadDrillBtn  = document.getElementById('downloadDrillBtn');
+    const downloadOutlineBtn= document.getElementById('downloadOutlineBtn');
     const tabModeBtn     = document.getElementById('tabModeBtn');
     const tabList        = document.getElementById('tabList');
     const tabHint        = document.getElementById('tabHint');
@@ -1371,7 +1452,15 @@ self.onmessage = function(e) {
     }
 
     function fitView() {
-        const bounds = boardBounds || copperBounds;
+        let bounds = boardBounds || copperBounds;
+        if (!bounds && drillHoles.length) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const h of drillHoles) {
+                minX = Math.min(minX, h.x - h.r); maxX = Math.max(maxX, h.x + h.r);
+                minY = Math.min(minY, h.y - h.r); maxY = Math.max(maxY, h.y + h.r);
+            }
+            bounds = { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+        }
         if (!bounds || !canvas.width) return;
         const PAD = 0.85;
         const scaleX = (canvas.width  * PAD) / bounds.width;
@@ -1397,7 +1486,7 @@ self.onmessage = function(e) {
     function drawPreview() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        const hasAnything = parsedContours.length || copperSegments.length || copperFlashes.length || copperRegions.length;
+        const hasAnything = parsedContours.length || copperSegments.length || copperFlashes.length || copperRegions.length || drillHoles.length;
         if (!hasAnything) {
             ctx.fillStyle = '#333';
             ctx.font = '14px system-ui';
@@ -1470,6 +1559,24 @@ self.onmessage = function(e) {
             drawPolyline(contour, '#4a90d9', 1);
         }
 
+        // Drill holes — purple circle outlines + crosshairs, sized to actual drill diameter
+        if (drillHoles.length) {
+            ctx.strokeStyle = '#a78bfa';
+            ctx.lineWidth   = 0.05;
+            ctx.lineCap     = 'round';
+            for (const h of drillHoles) {
+                const r = h.r > 0 ? h.r : 0.4;
+                ctx.beginPath();
+                ctx.arc(h.x, h.y, r, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(h.x - r, h.y); ctx.lineTo(h.x + r, h.y);
+                ctx.moveTo(h.x, h.y - r); ctx.lineTo(h.x, h.y + r);
+                ctx.stroke();
+            }
+            ctx.lineCap = 'butt';
+        }
+
         // Toolpath (red — offset from board edge by tool radius)
         if (toolpath) {
             drawPolyline(toolpath, '#e94560', 2);
@@ -1535,8 +1642,10 @@ self.onmessage = function(e) {
 
     // Transform from internal Y-down coords to real-world G-code coords.
     // Board bottom-left → (0, 0).
+    // Uses gcBounds when set (during GCode generation) to ensure all operations
+    // share one consistent origin regardless of which files are loaded.
     function toGC(pt) {
-        const bounds = boardBounds || copperBounds;
+        const bounds = gcBounds || boardBounds || copperBounds;
         return {
             x: pt.x - bounds.minX,
             y: bounds.maxY - pt.y
@@ -1562,6 +1671,77 @@ self.onmessage = function(e) {
             cx = last.x; cy = last.y;
         }
         return sorted;
+    }
+
+    // Sort plain {x,y} points by nearest-neighbor to minimise rapid-travel distance.
+    function sortPointsNearestNeighbor(pts, cx, cy) {
+        const remaining = pts.slice();
+        const sorted = [];
+        while (remaining.length) {
+            let bestIdx = 0, bestDist = Infinity;
+            for (let i = 0; i < remaining.length; i++) {
+                const dx = remaining[i].x - cx, dy = remaining[i].y - cy;
+                const dist = dx * dx + dy * dy;
+                if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+            }
+            const chosen = remaining.splice(bestIdx, 1)[0];
+            sorted.push(chosen);
+            cx = chosen.x; cy = chosen.y;
+        }
+        return sorted;
+    }
+
+    // Emit G-code lines for all drill holes from an Excellon file.
+    function emitDrillLines(lines, holes, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f) {
+        if (!holes.length) return;
+        lines.push('');
+        lines.push('; === DRILLING ===');
+
+        // Group holes by diameter, sorted by diameter ascending
+        const groups = [];
+        const seen = {};
+        for (const h of holes) {
+            const key = h.diam > 0 ? h.diam.toFixed(3) : '0.000';
+            if (!seen[key]) { seen[key] = []; groups.push({ diam: key, holes: seen[key] }); }
+            seen[key].push(h);
+        }
+        groups.sort((a, b) => parseFloat(a.diam) - parseFloat(b.diam));
+
+        for (let gi = 0; gi < groups.length; gi++) {
+            const g = groups[gi];
+            if (gi > 0) {
+                // Tool change between different drill sizes
+                lines.push('');
+                lines.push(`M5  ; spindle off`);
+                lines.push(`G0 Z${f(safeZ)}  ; retract`);
+                lines.push(`G0 X0 Y0  ; return to home for tool change`);
+                lines.push('');
+                lines.push(`; ================================================================`);
+                lines.push(`; DRILL BIT CHANGE`);
+                lines.push(`;   Remove : ${groups[gi - 1].diam} mm drill bit`);
+                lines.push(`;   Install: ${g.diam} mm drill bit`);
+                lines.push(`;`);
+                lines.push(`;   Steps:`);
+                lines.push(`;   1. Power down spindle and swap the bit`);
+                lines.push(`;   2. Jog Z down until new bit just touches PCB surface`);
+                lines.push(`;   3. Set Z = 0 in your GCode sender (Zero Z / G92 Z0)`);
+                lines.push(`;   4. Press Cycle Start / Resume`);
+                lines.push(`; ================================================================`);
+                lines.push(`M0  ; PAUSE - change drill bit, re-zero Z, then resume`);
+                lines.push('');
+                lines.push(`M3 S${spindleRpm}  ; spindle on`);
+                if (spindleDelay > 0) lines.push(`G4 P${spindleDelay}  ; wait for spindle`);
+                lines.push(`G0 Z${f(safeZ)}`);
+            }
+            lines.push(`; --- ${g.diam} mm drill bit (${g.holes.length} hole${g.holes.length > 1 ? 's' : ''}) ---`);
+            const pts = g.holes.map(h => toGC({ x: h.x, y: h.y }));
+            const sorted = sortPointsNearestNeighbor(pts, 0, 0);
+            for (const pt of sorted) {
+                lines.push(`G0 X${f(pt.x)} Y${f(pt.y)}  ; position over hole`);
+                lines.push(`G1 Z${f(drillDepth)} F${drillFeedRate}  ; drill`);
+                lines.push(`G0 Z${f(safeZ)}  ; retract`);
+            }
+        }
     }
 
     // Emit G-code lines for all isolation toolpaths.
@@ -1659,79 +1839,183 @@ self.onmessage = function(e) {
     }
 
     function generateGcode() {
-        if (!toolpath && !copperToolpaths.length) return '';
-        const bounds = boardBounds || copperBounds;
-        if (!bounds) return '';
+        if (!toolpath && !copperToolpaths.length && !drillHoles.length) return '';
+
+        // Compute canonical bounds once for all operations.
+        // For drill-only files, synthesize bounds from hole positions.
+        if (boardBounds || copperBounds) {
+            gcBounds = boardBounds || copperBounds;
+        } else if (drillHoles.length) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const h of drillHoles) {
+                minX = Math.min(minX, h.x - h.r); maxX = Math.max(maxX, h.x + h.r);
+                minY = Math.min(minY, h.y - h.r); maxY = Math.max(maxY, h.y + h.r);
+            }
+            gcBounds = { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+        }
+        if (!gcBounds) return '';
 
         const safeZ        = parseFloat(document.getElementById('safeZ').value);
         const plungeRate   = parseInt(document.getElementById('plungeRate').value);
         const spindleRpm   = parseInt(document.getElementById('spindleRpm').value);
         const spindleDelay = parseInt(document.getElementById('spindleDelay').value) || 0;
-
         const f = n => n.toFixed(3);
-        const lines = [];
-
-        lines.push('; PCBMiller - generated ' + new Date().toISOString());
-        lines.push(`; Board area: ${bounds.width.toFixed(2)} x ${bounds.height.toFixed(2)} mm`);
 
         const hasIsolation = copperToolpaths.length > 0;
+        const hasDrill     = drillHoles.length > 0;
         const hasEdgeCuts  = !!toolpath;
+        const combined     = modeCombined.checked;
 
-        if (hasIsolation) {
-            const isoDepth    = parseFloat(document.getElementById('isoDepth').value);
-            const isoFeedRate = parseInt(document.getElementById('isoFeedRate').value);
-            lines.push(`; Isolation routing: ${copperToolpaths.length} paths, Z${isoDepth} mm at ${isoFeedRate} mm/min`);
+        // --- Read operation params ---
+        let isoDepth = 0, isoFeedRate = 150, vbitAngle = '', isoToolDiam = '';
+        if (hasIsolation || hasDrill) {
+            isoDepth    = parseFloat(document.getElementById('isoDepth').value);
+            isoFeedRate = parseInt(document.getElementById('isoFeedRate').value);
+            vbitAngle   = document.getElementById('vbitAngle').value;
+            isoToolDiam = document.getElementById('isoToolDiam').value;
         }
+
+        let drillDepth = -1.8, drillFeedRate = 60;
+        if (hasDrill) {
+            drillDepth    = parseFloat(document.getElementById('drillDepth').value);
+            drillFeedRate = parseInt(document.getElementById('drillFeedRate').value);
+        }
+
+        let cutDepth = 0, passDepth = 0.5, feedRate = 300, tabLayers = 1, toolDiam = '?', passes = [];
         if (hasEdgeCuts) {
-            const cutDepth  = parseFloat(document.getElementById('cutDepth').value);
-            const passDepth = parseFloat(document.getElementById('passDepth').value);
-            const feedRate  = parseInt(document.getElementById('feedRate').value);
-            const passes    = buildPasses(cutDepth, passDepth);
-            lines.push(`; Edge cuts: Z${cutDepth} mm  ${passes.length} passes  Feed: ${feedRate} mm/min`);
-        }
-        lines.push('');
-
-        lines.push('G21        ; mm mode');
-        lines.push('G90        ; absolute coordinates');
-        lines.push('G17        ; XY plane');
-        lines.push(`M3 S${spindleRpm}  ; spindle on`);
-        if (spindleDelay > 0) lines.push(`G4 P${spindleDelay}  ; wait for spindle to reach speed`);
-        lines.push('');
-        lines.push(`G0 Z${f(safeZ)}  ; move to safe height`);
-
-        // Isolation routing first (before edge cuts, while board is still held in place)
-        if (hasIsolation) {
-            const isoDepth    = parseFloat(document.getElementById('isoDepth').value);
-            const isoFeedRate = parseInt(document.getElementById('isoFeedRate').value);
-            emitIsolationLines(lines, copperToolpaths, isoDepth, safeZ, isoFeedRate, plungeRate, f);
+            cutDepth  = parseFloat(document.getElementById('cutDepth').value);
+            passDepth = parseFloat(document.getElementById('passDepth').value);
+            feedRate  = parseInt(document.getElementById('feedRate').value);
+            tabLayers = Math.max(1, parseInt(document.getElementById('tabLayers').value) || 1);
+            toolDiam  = document.getElementById('toolDiam').value;
+            passes    = buildPasses(cutDepth, passDepth);
         }
 
-        // Edge cuts
+        // --- Build content for each operation ---
+        const isolationLines = [];
+        if (hasIsolation) emitIsolationLines(isolationLines, copperToolpaths, isoDepth, safeZ, isoFeedRate, plungeRate, f);
+
+        const drillLines = [];
+        if (hasDrill) emitDrillLines(drillLines, drillHoles, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f);
+
+        const edgeLines = [];
         if (hasEdgeCuts) {
-            const cutDepth   = parseFloat(document.getElementById('cutDepth').value);
-            const passDepth  = parseFloat(document.getElementById('passDepth').value);
-            const feedRate   = parseInt(document.getElementById('feedRate').value);
-            const tabLayers  = Math.max(1, parseInt(document.getElementById('tabLayers').value) || 1);
-            const passes     = buildPasses(cutDepth, passDepth);
-
-            if (hasIsolation) {
-                lines.push('');
-                lines.push('; === EDGE CUTS ===');
-            }
-
+            edgeLines.push('');
+            edgeLines.push('; === EDGE CUTS ===');
             passes.forEach((passZ, i) => {
                 const useTabs = tabs.length > 0 && i >= passes.length - tabLayers;
-                lines.push('');
-                lines.push(`; === Pass ${i + 1}/${passes.length}: Z${f(passZ)}${useTabs ? ' (tabs)' : ''} ===`);
-                emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f);
+                edgeLines.push('');
+                edgeLines.push(`; --- Pass ${i + 1}/${passes.length}: Z${f(passZ)}${useTabs ? ' (tabs)' : ''} ---`);
+                emitPassLines(edgeLines, passZ, safeZ, feedRate, plungeRate, useTabs, f);
             });
         }
 
-        lines.push('');
-        lines.push('M5   ; spindle off');
-        lines.push('M30  ; end of program');
+        // --- Helpers for assembly ---
+        function makeHeader(title) {
+            const h = [
+                `; PCBMiller - ${title} - generated ${new Date().toISOString()}`,
+                `; Board: ${gcBounds.width.toFixed(2)} x ${gcBounds.height.toFixed(2)} mm`,
+                `; Origin: place the board bottom-left corner at machine X0 Y0`,
+            ];
+            if (hasIsolation) h.push(`; Isolation routing: ${copperToolpaths.length} paths, Z${isoDepth} mm at ${isoFeedRate} mm/min`);
+            if (hasDrill)     h.push(`; Drilling: ${drillHoles.length} holes, Z${drillDepth} mm, bits: ${drillBitSizes.join(', ')} mm`);
+            if (hasEdgeCuts)  h.push(`; Edge cuts: Z${cutDepth} mm, ${passes.length} pass(es), feed ${feedRate} mm/min`);
+            return h;
+        }
 
-        return lines.join('\n');
+        function makeStartup() {
+            const s = [
+                'G21        ; mm mode',
+                'G90        ; absolute coordinates',
+                'G17        ; XY plane',
+                `M3 S${spindleRpm}  ; spindle on`,
+            ];
+            if (spindleDelay > 0) s.push(`G4 P${spindleDelay}  ; wait for spindle to reach speed`);
+            s.push('');
+            s.push(`G0 Z${f(safeZ)}  ; move to safe height`);
+            return s;
+        }
+
+        function makeToolChange(fromTool, toTool) {
+            const tc = [
+                '',
+                `M5  ; spindle off`,
+                `G0 Z${f(safeZ)}  ; retract`,
+                `G0 X0 Y0  ; return to home for tool change`,
+                '',
+                `; ================================================================`,
+                `; TOOL CHANGE`,
+                `;   Remove : ${fromTool}`,
+                `;   Install: ${toTool}`,
+                `;`,
+                `;   Steps:`,
+                `;   1. Power down spindle and swap the bit`,
+                `;   2. Jog Z down until new bit just touches PCB surface`,
+                `;   3. Set Z = 0 in your GCode sender (Zero Z / G92 Z0)`,
+                `;   4. Press Cycle Start / Resume`,
+                `; ================================================================`,
+                `M0  ; PAUSE - change bit, re-zero Z, then resume`,
+                '',
+                `M3 S${spindleRpm}  ; spindle on`,
+            ];
+            if (spindleDelay > 0) tc.push(`G4 P${spindleDelay}  ; wait for spindle`);
+            tc.push(`G0 Z${f(safeZ)}`);
+            return tc;
+        }
+
+        const isoTool   = `V-bit (${vbitAngle}° angle, ${isoToolDiam} mm tip) — isolation routing`;
+        const drillBitSizes = hasDrill ? [...new Set(drillHoles.map(h => h.diam > 0 ? h.diam.toFixed(3) : '?'))].sort((a, b) => parseFloat(a) - parseFloat(b)) : [];
+        const drillTool = `Drill bits (${drillBitSizes.join(', ')} mm) — drilling`;
+        const edgeTool  = `End mill (${toolDiam} mm) — board outline`;
+
+        let result;
+
+        if (combined) {
+            // Single file with M0 pauses between operations
+            const lines = [...makeHeader('Combined'), '', ...makeStartup()];
+
+            const sections = [];
+            if (hasIsolation) sections.push({ content: isolationLines, tool: isoTool });
+            if (hasDrill)     sections.push({ content: drillLines,     tool: drillTool });
+            if (hasEdgeCuts)  sections.push({ content: edgeLines,      tool: edgeTool });
+
+            for (let i = 0; i < sections.length; i++) {
+                if (i > 0) lines.push(...makeToolChange(sections[i - 1].tool, sections[i].tool));
+                lines.push(...sections[i].content);
+            }
+
+            lines.push('');
+            lines.push('M5   ; spindle off');
+            lines.push(`G0 Z${f(safeZ)}`);
+            lines.push('M30  ; end of program');
+
+            gcodeTraces = gcodeOutline = gcodeDrill = '';
+            result = lines.join('\n');
+        } else {
+            // Three separate files — each is a standalone, valid GCode file
+            function buildSectionFile(title, sectionLines) {
+                if (!sectionLines.length) return '';
+                return [
+                    ...makeHeader(title), '', ...makeStartup(),
+                    ...sectionLines,
+                    '', 'M5   ; spindle off', `G0 Z${f(safeZ)}`, 'M30  ; end of program',
+                ].join('\n');
+            }
+
+            gcodeTraces  = hasIsolation ? buildSectionFile('Isolation Routing', isolationLines) : '';
+            gcodeDrill   = hasDrill     ? buildSectionFile('Drilling',           drillLines)    : '';
+            gcodeOutline = hasEdgeCuts  ? buildSectionFile('Board Outline',      edgeLines)     : '';
+
+            // Textarea shows a combined preview so the user can review all content
+            const preview = [];
+            if (gcodeTraces)  { preview.push('; ====== FILE 1 OF 3: TRACES (Isolation Routing) ======\n'); preview.push(gcodeTraces); }
+            if (gcodeDrill)   { preview.push('\n; ====== FILE 2 OF 3: DRILL ======\n'); preview.push(gcodeDrill); }
+            if (gcodeOutline) { preview.push('\n; ====== FILE 3 OF 3: OUTLINE (Board Outline) ======\n'); preview.push(gcodeOutline); }
+            result = preview.join('\n');
+        }
+
+        gcBounds = null;
+        return result;
     }
 
     // =========================================================
@@ -1766,6 +2050,7 @@ self.onmessage = function(e) {
                 show(paramsSection);
                 show(tabsSection);
                 show(infoSection);
+                show(outputModeSection);
                 generateBtn.disabled = false;
 
                 infoWidth.textContent    = boardBounds.width.toFixed(2) + ' mm';
@@ -1831,6 +2116,7 @@ self.onmessage = function(e) {
                 copperFilenameEl.textContent = file.name;
                 show(isolationSection);
                 show(machineSection);
+                show(outputModeSection);
                 updateIsoDepthFromAngle();
                 if (!boardBounds) show(infoSection);
                 generateBtn.disabled = false;
@@ -1844,6 +2130,121 @@ self.onmessage = function(e) {
                 drawPreview();
             } catch (err) {
                 copperErrorMsg.textContent = 'Parse error: ' + err.message;
+                console.error(err);
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    // Parse an Excellon drill file and return [{x, y, diam}] in mm.
+    // Handles KiCad's decimal-notation format and legacy integer-notation formats.
+    function parseExcellon(content) {
+        const holes = [];
+        const tools = {};   // toolNum → diameter (mm)
+
+        let isMetric   = true;
+        let useDecimal = /^X[+-]?\d+\.\d+/m.test(content);  // KiCad modern: decimal coords
+        let inHeader   = false;
+        let curTool    = null;
+
+        // Determine integer-notation scale factor
+        // METRIC default: 3:3 format → divide raw integer by 1000
+        // INCH default:   2:4 format → divide by 10000, then × 25.4
+        let intScale = 0.001; // metric 3:3
+
+        for (const raw of content.split('\n')) {
+            const ln = raw.trim();
+            if (!ln || ln.startsWith(';')) continue;
+
+            if (ln === 'M48') { inHeader = true; continue; }
+            if (ln === '%' && inHeader) { inHeader = false; continue; }
+            if (ln === 'M30' || ln === 'M00') break;
+
+            if (inHeader) {
+                // Unit declaration
+                if (/^METRIC/i.test(ln)) { isMetric = true;  intScale = 0.001; }
+                if (/^INCH/i.test(ln))   { isMetric = false; intScale = 25.4 / 10000; }
+                // Tool definition: T{n}C{diam}
+                const tdef = ln.match(/^T(\d+)C([\d.]+)/i);
+                if (tdef) {
+                    let diam = parseFloat(tdef[2]);
+                    if (!isMetric) diam *= 25.4;
+                    tools[parseInt(tdef[1])] = diam;
+                }
+                continue;
+            }
+
+            // Tool selection: T{n} (no C following)
+            const tsel = ln.match(/^T(\d+)(?!C)/i);
+            if (tsel) {
+                const n = parseInt(tsel[1]);
+                curTool = n > 0 ? n : null;
+                // Handle inline tool defs outside header (some variants)
+                const tdef = ln.match(/^T\d+C([\d.]+)/i);
+                if (tdef) {
+                    let diam = parseFloat(tdef[1]);
+                    if (!isMetric) diam *= 25.4;
+                    tools[n] = diam;
+                }
+                continue;
+            }
+
+            // Drill coordinate: X{n}Y{n}  (may appear without T if tool already selected)
+            const pos = ln.match(/^X([+-]?[\d.]+)Y([+-]?[\d.]+)/i);
+            if (pos) {
+                let x = parseFloat(pos[1]);
+                let y = parseFloat(pos[2]);
+                if (!useDecimal) { x *= intScale; y *= intScale; }
+                else if (!isMetric) { x *= 25.4; y *= 25.4; }
+                const diam = (curTool !== null && tools[curTool]) ? tools[curTool] : 0;
+                // Negate Y to match Gerber Y-down convention used by all other parsers.
+                // toGC() will then flip it back to real-world GCode space.
+                holes.push({ x, y: -y, r: diam / 2, diam });
+            }
+        }
+
+        return holes;
+    }
+
+    function loadDrillFile(file) {
+        drillErrorMsg.textContent = '';
+        const reader = new FileReader();
+        reader.onload = e => {
+            try {
+                const holes = parseExcellon(e.target.result);
+                if (!holes.length) {
+                    drillErrorMsg.textContent = 'No drill holes found. Is this an Excellon drill file?';
+                    return;
+                }
+                drillHoles = holes;
+
+                drillDropZone.classList.add('drill-loaded');
+                drillFilenameEl.textContent = file.name;
+                show(drillSection);
+                show(machineSection);
+                show(outputModeSection);
+                show(infoSection);
+                generateBtn.disabled = false;
+
+                infoDrillCount.textContent = holes.length;
+                document.getElementById('infoDrillRow').style.display = '';
+
+                // Build bit list grouped by diameter
+                const bitCounts = {};
+                for (const h of holes) {
+                    const k = h.diam > 0 ? h.diam.toFixed(3) : '?';
+                    bitCounts[k] = (bitCounts[k] || 0) + 1;
+                }
+                const bitListEl = document.getElementById('drillBitList');
+                bitListEl.innerHTML = Object.entries(bitCounts)
+                    .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))
+                    .map(([d, n]) => `<div>&#x2022; <b>${d} mm</b> &times; ${n} hole${n > 1 ? 's' : ''}</div>`)
+                    .join('');
+
+                if (!boardBounds && !copperBounds) fitView();
+                drawPreview();
+            } catch (err) {
+                drillErrorMsg.textContent = 'Parse error: ' + err.message;
                 console.error(err);
             }
         };
@@ -2025,7 +2426,7 @@ self.onmessage = function(e) {
                 segments:    copperSegments,
                 flashes:     copperFlashes,
                 regions:     copperRegions,
-                boardOutline: outerContour || null,
+                boardOutline: null,
                 params: {
                     toolDiam,
                     isoWidth:  parseFloat(document.getElementById('isoWidth').value) || 0.2,
@@ -2155,9 +2556,16 @@ self.onmessage = function(e) {
         gcodeText = generateGcode();
         gcodeOutput.value = gcodeText;
         show(gcodeSection);
+
+        // Show the right download buttons for the selected mode
+        const isCombined = modeCombined.checked;
+        downloadBtn.classList.toggle('hidden', !isCombined);
+        downloadTracesBtn.classList.toggle('hidden', isCombined || !gcodeTraces);
+        downloadDrillBtn.classList.toggle('hidden',  isCombined || !gcodeDrill);
+        downloadOutlineBtn.classList.toggle('hidden', isCombined || !gcodeOutline);
     });
 
-    // Copy G-code
+    // Copy G-code (copies textarea content — combined text or full preview)
     copyBtn.addEventListener('click', () => {
         navigator.clipboard.writeText(gcodeOutput.value).then(() => {
             const orig = copyBtn.textContent;
@@ -2166,18 +2574,24 @@ self.onmessage = function(e) {
         });
     });
 
-    // Download G-code as .nc
-    downloadBtn.addEventListener('click', () => {
-        const blob = new Blob([gcodeOutput.value], { type: 'text/plain' });
+    // Helper to trigger a file download
+    function downloadNC(content, filename) {
+        const blob = new Blob([content], { type: 'text/plain' });
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
         a.href     = url;
-        a.download = 'pcbmill.nc';
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 1000);
-    });
+    }
+
+    // Download G-code as .nc
+    downloadBtn.addEventListener('click',        () => downloadNC(gcodeOutput.value, 'pcbmill.nc'));
+    downloadTracesBtn.addEventListener('click',  () => downloadNC(gcodeTraces,  'pcbmill-traces.nc'));
+    downloadDrillBtn.addEventListener('click',   () => downloadNC(gcodeDrill,   'pcbmill-drill.nc'));
+    downloadOutlineBtn.addEventListener('click', () => downloadNC(gcodeOutline, 'pcbmill-outline.nc'));
 
     // Copper layer drop zone
     copperDropZone.addEventListener('click', () => copperFileInput.click());
@@ -2190,6 +2604,18 @@ self.onmessage = function(e) {
         if (file) loadCopperFile(file);
     });
     copperFileInput.addEventListener('change', e => { if (e.target.files[0]) loadCopperFile(e.target.files[0]); });
+
+    // Drill file drop zone
+    drillDropZone.addEventListener('click', () => drillFileInput.click());
+    drillDropZone.addEventListener('dragover', e => { e.preventDefault(); drillDropZone.classList.add('drag-over'); });
+    drillDropZone.addEventListener('dragleave', () => drillDropZone.classList.remove('drag-over'));
+    drillDropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        drillDropZone.classList.remove('drag-over');
+        const file = e.dataTransfer.files[0];
+        if (file) loadDrillFile(file);
+    });
+    drillFileInput.addEventListener('change', e => { if (e.target.files[0]) loadDrillFile(e.target.files[0]); });
 
     // V-bit angle → update visuals at current depth (don't overwrite depth)
     document.getElementById('vbitAngle').addEventListener('input', () => {
