@@ -1151,21 +1151,28 @@
         return sum / 2;
     }
 
-    // Offset a closed polygon inward by distance d using ClipperOffset (round joins).
-    // Replaces the old vertex-bisector method which misbehaved on non-convex shapes.
-    function offsetPolygon(points, d) {
-        if (Math.abs(d) < 0.0001) return points.map(p => ({ ...p }));
+    function offsetPolygonRaw(points, delta) {
         const co = new ClipperLib.ClipperOffset(2.0, CLIPPER_ARC_TOL);
         co.AddPath(toClipper(points), ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
         const result = new ClipperLib.Paths();
-        co.Execute(result, -d * CLIPPER_SCALE); // negative = shrink inward
+        co.Execute(result, delta * CLIPPER_SCALE);
         if (!result.length) return points.map(p => ({ ...p }));
-        // Return the largest result polygon (handles cases where offset splits the shape).
         let best = result[0];
         for (const p of result) {
             if (Math.abs(ClipperLib.Clipper.Area(p)) > Math.abs(ClipperLib.Clipper.Area(best))) best = p;
         }
         return fromClipper(best);
+    }
+
+    // Offset a closed polygon outward by distance d using ClipperOffset (round joins).
+    function offsetPolygon(points, d) {
+        if (Math.abs(d) < 0.0001) return points.map(p => ({ ...p }));
+        const originalArea = Math.abs(signedArea(points));
+        const expanded = offsetPolygonRaw(points, d);
+        const shrunken = offsetPolygonRaw(points, -d);
+        const expandedArea = Math.abs(signedArea(expanded));
+        const shrunkenArea = Math.abs(signedArea(shrunken));
+        return expandedArea >= originalArea || expandedArea >= shrunkenArea ? expanded : shrunken;
     }
 
     // Return the contour with the largest absolute area (= board perimeter).
@@ -1867,6 +1874,63 @@ self.onmessage = function(e) {
         return sorted;
     }
 
+    function parseLinearMove(line) {
+        const motion = line.match(/^G1\s+(.*)$/);
+        if (!motion) return null;
+        if (/\bZ-?\d/.test(line)) return null;
+        const x = line.match(/\bX(-?\d+(?:\.\d+)?)\b/);
+        const y = line.match(/\bY(-?\d+(?:\.\d+)?)\b/);
+        if (!x || !y) return null;
+        const f = line.match(/\bF(-?\d+(?:\.\d+)?)\b/);
+        const commentIdx = line.indexOf(';');
+        const comment = commentIdx >= 0 ? line.slice(commentIdx).trim() : '';
+        return {
+            x: parseFloat(x[1]),
+            y: parseFloat(y[1]),
+            feed: f ? f[1] : '',
+            comment,
+            raw: line,
+        };
+    }
+
+    function isCollinearMove(a, b, c, tol = 0.002) {
+        const abx = b.x - a.x, aby = b.y - a.y;
+        const bcx = c.x - b.x, bcy = c.y - b.y;
+        const abLen = Math.hypot(abx, aby);
+        const bcLen = Math.hypot(bcx, bcy);
+        if (abLen < 1e-9 || bcLen < 1e-9) return true;
+        const cross = Math.abs(abx * bcy - aby * bcx);
+        return cross / Math.max(abLen, bcLen) <= tol;
+    }
+
+    function optimizeG1Moves(lines, tol = 0.002) {
+        const out = [];
+        for (const line of lines) {
+            const cur = parseLinearMove(line);
+            if (!cur || cur.comment) {
+                out.push(line);
+                continue;
+            }
+
+            const prevLine = out[out.length - 1];
+            const prevPrevLine = out[out.length - 2];
+            const prev = prevLine ? parseLinearMove(prevLine) : null;
+            const prevPrev = prevPrevLine ? parseLinearMove(prevPrevLine) : null;
+
+            if (!prev || !prevPrev || prev.feed !== cur.feed || prev.comment || prevPrev.comment) {
+                out.push(line);
+                continue;
+            }
+
+            if (isCollinearMove(prevPrev, prev, cur, tol)) {
+                out[out.length - 1] = `G1 X${cur.x.toFixed(3)} Y${cur.y.toFixed(3)}${cur.feed ? ` F${cur.feed}` : ''}`;
+            } else {
+                out.push(line);
+            }
+        }
+        return out;
+    }
+
     // Emit G-code lines for all drill holes from an Excellon file.
     function emitDrillLines(lines, holes, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f) {
         if (!holes.length) return;
@@ -1938,6 +2002,9 @@ self.onmessage = function(e) {
             lines.push(`G1 X${f(start.x)} Y${f(start.y)} F${feedRate}  ; close`);
             lines.push(`G0 Z${f(safeZ)}  ; retract`);
         }
+        const optimized = optimizeG1Moves(lines);
+        lines.length = 0;
+        lines.push(...optimized);
     }
 
     // Build the sorted tab intervals (in arc-length space) from the tabs array.
@@ -2040,6 +2107,9 @@ self.onmessage = function(e) {
         }
 
         lines.push(`G0 Z${f(safeZ)}  ; retract`);
+        const optimized = optimizeG1Moves(lines);
+        lines.length = 0;
+        lines.push(...optimized);
     }
 
     function generateGcode() {
