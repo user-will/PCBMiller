@@ -88,6 +88,8 @@
         .btn-tab-mode:hover { border-color: #4ade80; }
         .btn-row { display: flex; gap: 8px; }
         .btn-row button { flex: 1; }
+        .drop-zone-actions { margin-top: 8px; }
+        .drop-zone-actions button { width: 100%; }
         .info-row { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 6px; }
         .info-label { color: #888; }
         .info-value { color: #eee; }
@@ -144,6 +146,7 @@
                 <div class="filename" id="filename"></div>
             </div>
             <input type="file" id="fileInput" accept=".gbr,.ger,.gko,.gm1,.gm2,.gm3,.gtl,.gbl">
+            <div class="drop-zone-actions"><button class="btn-secondary hidden" id="clearEdgeBtn">Clear Edge Cuts</button></div>
             <div class="hint">KiCad: Edge_Cuts.gbr or .gko</div>
             <div class="error" id="errorMsg"></div>
         </div>
@@ -158,6 +161,7 @@
                 <div class="copper-filename" id="copperFilename"></div>
             </div>
             <input type="file" id="copperFileInput" accept=".svg,.gbr,.ger,.gtl,.gbl,.gts,.gbs">
+            <div class="drop-zone-actions"><button class="btn-secondary hidden" id="clearCopperBtn">Clear Copper</button></div>
             <div class="hint">KiCad: File → Plot → SVG, select F.Cu layer</div>
             <div class="error" id="copperErrorMsg"></div>
         </div>
@@ -170,6 +174,7 @@
                 <div class="drill-filename" id="drillFilename"></div>
             </div>
             <input type="file" id="drillFileInput" accept=".drl,.exc,.xln,.ncd,.drd,.txt">
+            <div class="drop-zone-actions"><button class="btn-secondary hidden" id="clearDrillBtn">Clear Drill</button></div>
             <div class="hint">KiCad: PCB Editor → File → Fabrication Outputs → Drill Files</div>
             <div class="error" id="drillErrorMsg"></div>
         </div>
@@ -204,12 +209,13 @@
             <div class="input-group">
                 <label>Copper Cut Depth</label>
                 <div class="input-row">
-                    <input type="number" id="isoDepth" value="-0.1" step="0.001" max="0">
+                    <input type="number" id="isoDepth" value="0.1" step="0.001" min="0.001">
                     <span class="unit">mm</span>
                 </div>
                 <div class="hint" id="isoDepthHint">0.035 mm = 1oz copper thickness</div>
             </div>
             <canvas id="vbitPreview" width="240" height="148"></canvas>
+            <div class="info-row"><span class="info-label">V-bit cut width</span><span class="info-value" id="vbitCutWidth">—</span></div>
             <div class="input-group">
                 <label>Isolation Passes</label>
                 <div class="input-row">
@@ -228,7 +234,7 @@
             <div class="input-group">
                 <label>Isolation Feed Rate</label>
                 <div class="input-row">
-                    <input type="number" id="isoFeedRate" value="150" step="10" min="1" max="1000">
+                    <input type="number" id="isoFeedRate" value="200" step="10" min="1" max="1000">
                     <span class="unit">mm/min</span>
                 </div>
             </div>
@@ -242,7 +248,7 @@
             <div class="input-group">
                 <label>Safe Z Height</label>
                 <div class="input-row">
-                    <input type="number" id="safeZ" value="2.0" step="0.5" min="0.5">
+                    <input type="number" id="safeZ" value="5.0" step="0.5" min="0.5">
                     <span class="unit">mm</span>
                 </div>
             </div>
@@ -257,10 +263,10 @@
             <div class="input-group">
                 <label>Spindle Speed</label>
                 <div class="input-row">
-                    <input type="number" id="spindleRpm" value="1000" step="50" min="0" max="1000">
+                    <input type="number" id="spindleRpm" value="10000" step="100" min="0">
                     <span class="unit">RPM</span>
                 </div>
-                <div class="hint">Machine max: 1000 RPM</div>
+                <div class="hint">Spindle speed (S value in M3 command)</div>
             </div>
             <div class="input-group">
                 <label>Spindle Warm-up Delay</label>
@@ -283,7 +289,7 @@
             <div class="input-group">
                 <label>Drill Depth</label>
                 <div class="input-row">
-                    <input type="number" id="drillDepth" value="-1.8" step="0.1" max="0">
+                    <input type="number" id="drillDepth" value="2.0" step="0.1" min="0.1">
                     <span class="unit">mm</span>
                 </div>
                 <div class="hint">Board thickness + ~0.2 mm clearance</div>
@@ -311,14 +317,14 @@
             <div class="input-group">
                 <label>Cut Depth (total)</label>
                 <div class="input-row">
-                    <input type="number" id="cutDepth" value="-1.6" step="0.1" max="0">
+                    <input type="number" id="cutDepth" value="1.6" step="0.1" min="0.1">
                     <span class="unit">mm</span>
                 </div>
             </div>
             <div class="input-group">
                 <label>Pass Depth</label>
                 <div class="input-row">
-                    <input type="number" id="passDepth" value="0.5" step="0.1" min="0.05" max="10">
+                    <input type="number" id="passDepth" value="1.8" step="0.1" min="0.05" max="10">
                     <span class="unit">mm</span>
                 </div>
                 <div class="hint">Depth removed per pass — set equal to Cut Depth for single pass</div>
@@ -326,7 +332,7 @@
             <div class="input-group">
                 <label>Feed Rate</label>
                 <div class="input-row">
-                    <input type="number" id="feedRate" value="300" step="10" min="1" max="1000">
+                    <input type="number" id="feedRate" value="200" step="10" min="1" max="1000">
                     <span class="unit">mm/min</span>
                 </div>
                 <div class="hint">Machine max: 1000 mm/min</div>
@@ -367,6 +373,7 @@
             <div class="info-row" id="infoTracesRow" style="display:none"><span class="info-label">Traces</span><span class="info-value" id="infoTraces">—</span></div>
             <div class="info-row" id="infoIsoPathsRow" style="display:none"><span class="info-label">Iso paths</span><span class="info-value" id="infoIsoPaths">—</span></div>
             <div class="info-row" id="infoDrillRow" style="display:none"><span class="info-label">Drill holes</span><span class="info-value" id="infoDrillCount">—</span></div>
+            <div class="info-row"><span class="info-label">Est. run time</span><span class="info-value" id="infoRunTime">—</span></div>
             <hr class="section-divider">
         </div>
 
@@ -451,6 +458,7 @@
     const fileInput      = document.getElementById('fileInput');
     const filenameEl     = document.getElementById('filename');
     const errorMsg       = document.getElementById('errorMsg');
+    const clearEdgeBtn   = document.getElementById('clearEdgeBtn');
     const machineSection = document.getElementById('machineSection');
     const paramsSection  = document.getElementById('paramsSection');
     const tabsSection    = document.getElementById('tabsSection');
@@ -467,14 +475,17 @@
     const infoTraces     = document.getElementById('infoTraces');
     const infoIsoPaths   = document.getElementById('infoIsoPaths');
     const infoDrillCount = document.getElementById('infoDrillCount');
+    const infoRunTime    = document.getElementById('infoRunTime');
     const copperDropZone    = document.getElementById('copperDropZone');
     const copperFileInput   = document.getElementById('copperFileInput');
     const copperFilenameEl  = document.getElementById('copperFilename');
     const copperErrorMsg    = document.getElementById('copperErrorMsg');
+    const clearCopperBtn    = document.getElementById('clearCopperBtn');
     const drillDropZone     = document.getElementById('drillDropZone');
     const drillFileInput    = document.getElementById('drillFileInput');
     const drillFilenameEl   = document.getElementById('drillFilename');
     const drillErrorMsg     = document.getElementById('drillErrorMsg');
+    const clearDrillBtn     = document.getElementById('clearDrillBtn');
     const isolationSection  = document.getElementById('isolationSection');
     const drillSection      = document.getElementById('drillSection');
     const outputModeSection = document.getElementById('outputModeSection');
@@ -487,17 +498,32 @@
     const tabHint        = document.getElementById('tabHint');
 
     function show(el) { el.classList.remove('hidden'); }
+    function hide(el) { el.classList.add('hidden'); }
+    function hasEdgeCutsLoaded() { return !!toolpath; }
+    function hasCopperLoaded() { return copperSegments.length || copperFlashes.length || copperRegions.length; }
+    function hasDrillLoaded() { return drillHoles.length > 0; }
 
-    // Build the array of Z depths for each pass, e.g. [-0.5, -1.0, -1.25] for
-    // cutDepth=-1.25 and passDepth=0.5. The final entry is always exactly cutDepth.
+    function formatMinutes(totalMinutes) {
+        if (!isFinite(totalMinutes) || totalMinutes <= 0) return '—';
+        const roundedSeconds = Math.round(totalMinutes * 60);
+        const hours = Math.floor(roundedSeconds / 3600);
+        const minutes = Math.floor((roundedSeconds % 3600) / 60);
+        const seconds = roundedSeconds % 60;
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        if (minutes > 0) return `${minutes}m ${seconds}s`;
+        return `${seconds}s`;
+    }
+
+    // Build the array of Z depths for each pass from positive UI depths.
+    // Example: cutDepth=1.25 and passDepth=0.5 => [-0.5, -1.0, -1.25].
     function buildPasses(cutDepth, passDepth) {
         const passes = [];
-        if (passDepth > 0 && passDepth < Math.abs(cutDepth)) {
-            for (let z = -passDepth; z > cutDepth + 0.0001; z -= passDepth) {
+        if (passDepth > 0 && passDepth < cutDepth) {
+            for (let z = -passDepth; z > -cutDepth + 0.0001; z -= passDepth) {
                 passes.push(parseFloat(z.toFixed(4)));
             }
         }
-        passes.push(cutDepth);
+        passes.push(-cutDepth);
         return passes;
     }
 
@@ -507,6 +533,155 @@
         if (!infoPasses || isNaN(cutDepth) || isNaN(passDepth) || passDepth <= 0) return;
         const count = buildPasses(cutDepth, passDepth).length;
         infoPasses.textContent = count + (count === 1 ? ' pass' : ' passes');
+        updateRuntimeEstimate();
+    }
+
+    function refreshUiState() {
+        const hasEdge = hasEdgeCutsLoaded();
+        const hasCopper = hasCopperLoaded();
+        const hasDrill = hasDrillLoaded();
+        const hasAny = hasEdge || hasCopper || hasDrill;
+
+        clearEdgeBtn.classList.toggle('hidden', !hasEdge);
+        clearCopperBtn.classList.toggle('hidden', !hasCopper);
+        clearDrillBtn.classList.toggle('hidden', !hasDrill);
+
+        hasEdge ? show(paramsSection) : hide(paramsSection);
+        hasEdge ? show(tabsSection) : hide(tabsSection);
+        hasCopper ? show(isolationSection) : hide(isolationSection);
+        hasDrill ? show(drillSection) : hide(drillSection);
+        hasAny ? show(machineSection) : hide(machineSection);
+        hasAny ? show(outputModeSection) : hide(outputModeSection);
+        hasAny ? show(infoSection) : hide(infoSection);
+
+        document.getElementById('infoTracesRow').style.display = hasCopper ? '' : 'none';
+        document.getElementById('infoIsoPathsRow').style.display = hasCopper ? '' : 'none';
+        document.getElementById('infoDrillRow').style.display = hasDrill ? '' : 'none';
+        generateBtn.disabled = !hasAny;
+
+        if (!hasAny) {
+            hide(gcodeSection);
+            gcodeOutput.value = '';
+            infoWidth.textContent = '—';
+            infoHeight.textContent = '—';
+            infoContours.textContent = '—';
+            infoPasses.textContent = '—';
+            infoTraces.textContent = '—';
+            infoIsoPaths.textContent = '—';
+            infoDrillCount.textContent = '—';
+            infoRunTime.textContent = '—';
+            return;
+        }
+
+        const dims = boardBounds || copperBounds;
+        infoWidth.textContent = dims ? `${dims.width.toFixed(2)} mm` : '—';
+        infoHeight.textContent = dims ? `${dims.height.toFixed(2)} mm` : '—';
+        infoContours.textContent = hasEdge && parsedContours.length ? parsedContours.length : '—';
+        if (hasEdge) updatePassCount();
+        else infoPasses.textContent = '—';
+        infoTraces.textContent = hasCopper ? copperSegments.length + copperFlashes.length + copperRegions.length : '—';
+        infoIsoPaths.textContent = hasCopper ? copperToolpaths.length : '—';
+        infoDrillCount.textContent = hasDrill ? drillHoles.length : '—';
+        updateRuntimeEstimate();
+    }
+
+    function updateRuntimeEstimate() {
+        let minutes = 0;
+        const safeZ = parseFloat(document.getElementById('safeZ').value) || 5;
+        const plungeRate = Math.max(1, parseFloat(document.getElementById('plungeRate').value) || 60);
+        const spindleDelay = Math.max(0, parseFloat(document.getElementById('spindleDelay').value) || 0);
+
+        if (copperToolpaths.length) {
+            const feed = Math.max(1, parseFloat(document.getElementById('isoFeedRate').value) || 200);
+            const depth = parseFloat(document.getElementById('isoDepth').value) || 0.1;
+            for (const path of copperToolpaths) {
+                if (path.length < 2) continue;
+                const start = toGC(path[0]);
+                minutes += Math.hypot(start.x, start.y) / feed;
+                for (let i = 1; i < path.length; i++) {
+                    const a = toGC(path[i - 1]);
+                    const b = toGC(path[i]);
+                    minutes += Math.hypot(b.x - a.x, b.y - a.y) / feed;
+                }
+                minutes += ((safeZ + depth) * 2) / plungeRate;
+            }
+        }
+
+        if (drillHoles.length) {
+            const feed = Math.max(1, parseFloat(document.getElementById('drillFeedRate').value) || 60);
+            const depth = parseFloat(document.getElementById('drillDepth').value) || 2;
+            const pts = sortPointsNearestNeighbor(drillHoles.map(h => toGC({ x: h.x, y: h.y })), 0, 0);
+            let cx = 0, cy = 0;
+            for (const pt of pts) {
+                minutes += Math.hypot(pt.x - cx, pt.y - cy) / feed;
+                minutes += ((safeZ + depth) * 2) / feed;
+                cx = pt.x;
+                cy = pt.y;
+            }
+            const bitCount = new Set(drillHoles.map(h => h.diam > 0 ? h.diam.toFixed(3) : '0.000')).size;
+            minutes += spindleDelay * bitCount / 60;
+        }
+
+        if (toolpath && toolpathLens && toolpathLens.length) {
+            const feed = Math.max(1, parseFloat(document.getElementById('feedRate').value) || 200);
+            const cutDepth = parseFloat(document.getElementById('cutDepth').value) || 1.6;
+            const passDepth = parseFloat(document.getElementById('passDepth').value) || 1.8;
+            const passes = buildPasses(cutDepth, passDepth);
+            const total = toolpathLens[toolpathLens.length - 1];
+            const start = toGC(toolpath[0]);
+            for (const passZ of passes) {
+                minutes += Math.hypot(start.x, start.y) / feed;
+                minutes += total / feed;
+                minutes += ((safeZ + Math.abs(passZ)) * 2) / plungeRate;
+            }
+        }
+
+        infoRunTime.textContent = formatMinutes(minutes);
+    }
+
+    function clearEdgeFile() {
+        parsedContours = [];
+        outerContour = null;
+        boardBounds = null;
+        toolpath = null;
+        toolpathLens = null;
+        tabs = [];
+        tabModeActive = false;
+        filenameEl.textContent = '';
+        fileInput.value = '';
+        errorMsg.textContent = '';
+        dropZone.classList.remove('loaded');
+        tabModeBtn.classList.remove('active');
+        canvas.classList.remove('tab-mode');
+        tabHint.style.display = 'none';
+        renderTabList();
+        refreshUiState();
+        drawPreview();
+    }
+
+    function clearCopperFile() {
+        copperSegments = [];
+        copperFlashes = [];
+        copperRegions = [];
+        copperToolpaths = [];
+        copperBounds = null;
+        copperFilenameEl.textContent = '';
+        copperFileInput.value = '';
+        copperErrorMsg.textContent = '';
+        copperDropZone.classList.remove('copper-loaded', 'loaded');
+        refreshUiState();
+        drawPreview();
+    }
+
+    function clearDrillFile() {
+        drillHoles = [];
+        drillFilenameEl.textContent = '';
+        drillFileInput.value = '';
+        drillErrorMsg.textContent = '';
+        drillDropZone.classList.remove('drill-loaded', 'loaded');
+        document.getElementById('drillBitList').innerHTML = '';
+        refreshUiState();
+        drawPreview();
     }
 
     // =========================================================
@@ -1128,6 +1303,7 @@ self.onmessage = function(e) {
             copperToolpaths = e.data;
             infoIsoPaths.textContent = copperToolpaths.length;
             document.getElementById('isoComputingMsg').style.display = 'none';
+            refreshUiState();
             drawPreview();
         };
         _isoWorker.onerror = err => {
@@ -1434,7 +1610,7 @@ self.onmessage = function(e) {
             btn.className = 'tab-remove';
             btn.textContent = '×';
             btn.title = 'Remove tab';
-            btn.addEventListener('click', () => { tabs.splice(idx, 1); renderTabList(); drawPreview(); });
+            btn.addEventListener('click', () => { tabs.splice(idx, 1); renderTabList(); updateRuntimeEstimate(); drawPreview(); });
             li.appendChild(btn);
             tabList.appendChild(li);
         });
@@ -1782,26 +1958,54 @@ self.onmessage = function(e) {
         return startLen;
     }
 
+    function isLengthInsideTabs(len, intervals, total) {
+        const wrapped = ((len % total) + total) % total;
+        return intervals.some(iv => {
+            const s = ((iv.s % total) + total) % total;
+            const e = ((iv.e % total) + total) % total;
+            return s <= e ? (wrapped >= s && wrapped <= e) : (wrapped >= s || wrapped <= e);
+        });
+    }
+
+    function findOptimizedStartLen(intervals = []) {
+        if (!toolpathLens || toolpathLens.length < 2) return 0;
+        const total = toolpathLens[toolpathLens.length - 1];
+        if (total <= 0) return 0;
+        const STEP = 0.5;
+        let bestLen = findClearStartLen(intervals);
+        let bestDist = Infinity;
+        for (let len = 0; len < total; len += STEP) {
+            if (intervals.length && isLengthInsideTabs(len, intervals, total)) continue;
+            const pt = toGC(pointAtLength(len));
+            const dist = pt.x * pt.x + pt.y * pt.y;
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestLen = len;
+            }
+        }
+        return bestLen;
+    }
+
     // Emit G-code lines for one full pass around the contour at depth passZ.
     // useTabs = true only on passes where we actually want gaps (typically the final pass).
     function emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f) {
         const total = toolpathLens[toolpathLens.length - 1];
+        const STEP = 0.3;
 
         if (!useTabs || !tabs.length) {
-            // Simple closed loop
-            const start = toGC(toolpath[0]);
+            const startLen = findOptimizedStartLen();
+            const start = toGC(pointAtLength(startLen));
             lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
             lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
-            for (let i = 1; i < toolpath.length; i++) {
-                const pt = toGC(toolpath[i]);
+            for (let walked = STEP; walked < total; walked += STEP) {
+                const pt = toGC(pointAtLength(startLen + walked));
                 lines.push(`G1 X${f(pt.x)} Y${f(pt.y)} F${feedRate}`);
             }
             lines.push(`G1 X${f(start.x)} Y${f(start.y)} F${feedRate}  ; close`);
         } else {
             const intervals = buildTabIntervals();
-            const startLen  = findClearStartLen(intervals);
+            const startLen  = findOptimizedStartLen(intervals);
             const startPt   = toGC(pointAtLength(startLen));
-            const STEP = 0.3; // mm resolution for detecting tab entry/exit
 
             lines.push(`G0 X${f(startPt.x)} Y${f(startPt.y)}`);
             lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
@@ -1817,7 +2021,7 @@ self.onmessage = function(e) {
 
                 // Is this arc-length inside any tab?
                 const absLen = (startLen + walked) % total;
-                const inTab = intervals.some(iv => absLen >= iv.s && absLen <= iv.e);
+                const inTab = isLengthInsideTabs(absLen, intervals, total);
 
                 if (inTab && cutting) {
                     lines.push(`G0 Z${f(safeZ)}  ; lift over tab`);
@@ -1867,28 +2071,31 @@ self.onmessage = function(e) {
         const combined     = modeCombined.checked;
 
         // --- Read operation params ---
-        let isoDepth = 0, isoFeedRate = 150, vbitAngle = '', isoToolDiam = '';
+        let isoDepth = 0, isoFeedRate = 150, vbitAngle = '', isoToolDiam = '', isoDepthUi = 0;
         if (hasIsolation || hasDrill) {
-            isoDepth    = parseFloat(document.getElementById('isoDepth').value);
+            isoDepthUi  = parseFloat(document.getElementById('isoDepth').value);
+            isoDepth    = -isoDepthUi;
             isoFeedRate = parseInt(document.getElementById('isoFeedRate').value);
             vbitAngle   = document.getElementById('vbitAngle').value;
             isoToolDiam = document.getElementById('isoToolDiam').value;
         }
 
-        let drillDepth = -1.8, drillFeedRate = 60;
+        let drillDepth = -1.8, drillDepthUi = 1.8, drillFeedRate = 60;
         if (hasDrill) {
-            drillDepth    = parseFloat(document.getElementById('drillDepth').value);
+            drillDepthUi  = parseFloat(document.getElementById('drillDepth').value);
+            drillDepth    = -drillDepthUi;
             drillFeedRate = parseInt(document.getElementById('drillFeedRate').value);
         }
 
-        let cutDepth = 0, passDepth = 0.5, feedRate = 300, tabLayers = 1, toolDiam = '?', passes = [];
+        let cutDepth = 0, cutDepthUi = 0, passDepth = 0.5, feedRate = 300, tabLayers = 1, toolDiam = '?', passes = [];
         if (hasEdgeCuts) {
-            cutDepth  = parseFloat(document.getElementById('cutDepth').value);
+            cutDepthUi = parseFloat(document.getElementById('cutDepth').value);
+            cutDepth  = -cutDepthUi;
             passDepth = parseFloat(document.getElementById('passDepth').value);
             feedRate  = parseInt(document.getElementById('feedRate').value);
             tabLayers = Math.max(1, parseInt(document.getElementById('tabLayers').value) || 1);
             toolDiam  = document.getElementById('toolDiam').value;
-            passes    = buildPasses(cutDepth, passDepth);
+            passes    = buildPasses(cutDepthUi, passDepth);
         }
 
         // --- Build content for each operation ---
@@ -1914,12 +2121,13 @@ self.onmessage = function(e) {
         function makeHeader(title) {
             const h = [
                 `; PCBMiller - ${title} - generated ${new Date().toISOString()}`,
+                `; Units: mm`,
                 `; Board: ${gcBounds.width.toFixed(2)} x ${gcBounds.height.toFixed(2)} mm`,
                 `; Origin: place the board bottom-left corner at machine X0 Y0`,
             ];
-            if (hasIsolation) h.push(`; Isolation routing: ${copperToolpaths.length} paths, Z${isoDepth} mm at ${isoFeedRate} mm/min`);
-            if (hasDrill)     h.push(`; Drilling: ${drillHoles.length} holes, Z${drillDepth} mm, bits: ${drillBitSizes.join(', ')} mm`);
-            if (hasEdgeCuts)  h.push(`; Edge cuts: Z${cutDepth} mm, ${passes.length} pass(es), feed ${feedRate} mm/min`);
+            if (hasIsolation) h.push(`; Isolation routing: ${copperToolpaths.length} paths, depth ${isoDepthUi} mm at ${isoFeedRate} mm/min`);
+            if (hasDrill)     h.push(`; Drilling: ${drillHoles.length} holes, depth ${drillDepthUi} mm, bits: ${drillBitSizes.join(', ')} mm`);
+            if (hasEdgeCuts)  h.push(`; Edge cuts: depth ${cutDepthUi} mm, ${passes.length} pass(es), feed ${feedRate} mm/min`);
             return h;
         }
 
@@ -2058,6 +2266,7 @@ self.onmessage = function(e) {
                 infoContours.textContent = contours.length;
                 updatePassCount();
                 updateTabHint();
+                refreshUiState();
 
                 renderTabList();
                 fitView();
@@ -2125,6 +2334,7 @@ self.onmessage = function(e) {
                 infoIsoPaths.textContent  = copperToolpaths.length;
                 document.getElementById('infoTracesRow').style.display   = '';
                 document.getElementById('infoIsoPathsRow').style.display = '';
+                refreshUiState();
 
                 if (!boardBounds) fitView();
                 drawPreview();
@@ -2240,6 +2450,7 @@ self.onmessage = function(e) {
                     .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))
                     .map(([d, n]) => `<div>&#x2022; <b>${d} mm</b> &times; ${n} hole${n > 1 ? 's' : ''}</div>`)
                     .join('');
+                refreshUiState();
 
                 if (!boardBounds && !copperBounds) fitView();
                 drawPreview();
@@ -2387,18 +2598,21 @@ self.onmessage = function(e) {
     // Update the depth hint to show the actual cut width produced at the current depth.
     function updateIsoDepthHint() {
         const angle   = parseFloat(document.getElementById('vbitAngle').value);
-        const depth   = parseFloat(document.getElementById('isoDepth').value) || -0.05;
+        const depth   = parseFloat(document.getElementById('isoDepth').value) || 0.05;
         const tipDiam = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
         const hint    = document.getElementById('isoDepthHint');
         if (!hint) return;
         const w = isoCalcCutWidth(depth, angle, tipDiam);
         if (w == null) {
             hint.textContent = '0.035 mm = 1oz copper thickness';
+            document.getElementById('vbitCutWidth').textContent = '—';
         } else {
             hint.textContent = `Cut width at this depth: ${w.toFixed(3)} mm  ·  0.035 mm = 1oz copper`;
+            document.getElementById('vbitCutWidth').textContent = `${w.toFixed(3)} mm`;
         }
         drawVbitPreview();
         scheduleRedraw();
+        updateRuntimeEstimate();
     }
 
     // Auto-calculate the required depth from angle + isolation width + tip diameter.
@@ -2411,7 +2625,7 @@ self.onmessage = function(e) {
         if (tanHalf <= 0) return;
         let depth = (isoWidth - tipDiam) / (2 * tanHalf);
         if (depth < 0.005) depth = 0.005;
-        document.getElementById('isoDepth').value = (-depth).toFixed(3);
+        document.getElementById('isoDepth').value = depth.toFixed(3);
         updateIsoDepthHint();
     }
 
@@ -2466,6 +2680,7 @@ self.onmessage = function(e) {
                 const width = parseFloat(document.getElementById('tabWidth').value) || 3.0;
                 tabs.push({ t, width });
                 renderTabList();
+                updateRuntimeEstimate();
                 drawPreview();
                 return;
             }
@@ -2497,6 +2712,7 @@ self.onmessage = function(e) {
 
     // Drag-and-drop
     dropZone.addEventListener('click', () => fileInput.click());
+    clearEdgeBtn.addEventListener('click', clearEdgeFile);
     dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
     dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
     dropZone.addEventListener('drop', e => {
@@ -2513,6 +2729,7 @@ self.onmessage = function(e) {
         const toolDiam = parseFloat(document.getElementById('toolDiam').value);
         toolpath     = offsetPolygon(outerContour, toolDiam / 2);
         toolpathLens = computeArcLengths(toolpath);
+        updateRuntimeEstimate();
         drawPreview();
     });
 
@@ -2535,7 +2752,7 @@ self.onmessage = function(e) {
         // First tabbed pass is at index: passes.length - tabLayers (clamped to 0).
         const firstTabbedIdx = Math.max(0, passes.length - tabLayers);
         const depthBefore    = firstTabbedIdx > 0 ? Math.abs(passes[firstTabbedIdx - 1]) : 0;
-        const actualMm       = (Math.abs(cutDepth) - depthBefore).toFixed(2);
+        const actualMm       = (cutDepth - depthBefore).toFixed(2);
         hint.textContent = `= ${actualMm} mm of material left as tab`;
     }
 
@@ -2595,6 +2812,7 @@ self.onmessage = function(e) {
 
     // Copper layer drop zone
     copperDropZone.addEventListener('click', () => copperFileInput.click());
+    clearCopperBtn.addEventListener('click', clearCopperFile);
     copperDropZone.addEventListener('dragover', e => { e.preventDefault(); copperDropZone.classList.add('drag-over'); });
     copperDropZone.addEventListener('dragleave', () => copperDropZone.classList.remove('drag-over'));
     copperDropZone.addEventListener('drop', e => {
@@ -2607,6 +2825,7 @@ self.onmessage = function(e) {
 
     // Drill file drop zone
     drillDropZone.addEventListener('click', () => drillFileInput.click());
+    clearDrillBtn.addEventListener('click', clearDrillFile);
     drillDropZone.addEventListener('dragover', e => { e.preventDefault(); drillDropZone.classList.add('drag-over'); });
     drillDropZone.addEventListener('dragleave', () => drillDropZone.classList.remove('drag-over'));
     drillDropZone.addEventListener('drop', e => {
@@ -2639,6 +2858,12 @@ self.onmessage = function(e) {
         document.getElementById(id).addEventListener('input', rebuildIsolation);
     });
 
+    [
+        'safeZ', 'plungeRate', 'spindleRpm', 'spindleDelay',
+        'drillDepth', 'drillFeedRate', 'feedRate', 'cutDepth', 'passDepth', 'tabWidth', 'tabLayers',
+        'isoFeedRate', 'isoDepth'
+    ].forEach(id => document.getElementById(id).addEventListener('input', updateRuntimeEstimate));
+
     // =========================================================
     // === INIT
     // =========================================================
@@ -2646,6 +2871,8 @@ self.onmessage = function(e) {
     new ResizeObserver(resizeCanvas).observe(canvas.parentElement);
     resizeCanvas();
     initCanvasInteraction();
+    refreshUiState();
+    updateIsoDepthHint();
 
     </script>
 </body>
