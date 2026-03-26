@@ -655,6 +655,7 @@
         canvas.classList.remove('tab-mode');
         tabHint.style.display = 'none';
         renderTabList();
+        if (hasCopperLoaded()) rebuildIsolation();
         refreshUiState();
         drawPreview();
     }
@@ -2320,6 +2321,7 @@ self.onmessage = function(e) {
                 const toolDiam = parseFloat(document.getElementById('toolDiam').value);
                 toolpath     = offsetPolygon(outerContour, toolDiam / 2);
                 toolpathLens = computeArcLengths(toolpath);
+                if (hasCopperLoaded()) rebuildIsolation();
 
                 // Reveal sidebar sections
                 dropZone.classList.add('loaded');
@@ -2710,7 +2712,7 @@ self.onmessage = function(e) {
                 segments:    copperSegments,
                 flashes:     copperFlashes,
                 regions:     copperRegions,
-                boardOutline: null,
+                boardOutline: outerContour,
                 params: {
                     toolDiam,
                     isoWidth:  parseFloat(document.getElementById('isoWidth').value) || 0.2,
