@@ -1836,23 +1836,42 @@ self.onmessage = function(e) {
         };
     }
 
+    function rotateClosedPath(path, startIdx) {
+        if (!path.length) return path.slice();
+        return path.slice(startIdx).concat(path.slice(0, startIdx));
+    }
+
+    function nearestPathStartIndex(path, cx, cy) {
+        let bestIdx = 0, bestDist = Infinity;
+        for (let i = 0; i < path.length; i++) {
+            const p = toGC(path[i]);
+            const dx = p.x - cx, dy = p.y - cy;
+            const dist = dx * dx + dy * dy;
+            if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+        }
+        return { index: bestIdx, dist: bestDist };
+    }
+
     // Sort closed toolpath loops by nearest-neighbor to minimise rapid-travel distance.
-    // Starting from (cx, cy), repeatedly picks the loop whose first point is closest.
+    // For each closed loop, rotate its start point to the nearest location to reduce entry rapids.
     function sortPathsNearestNeighbor(paths, cx, cy) {
         const remaining = paths.slice();
         const sorted = [];
         while (remaining.length) {
             let bestIdx = 0, bestDist = Infinity;
+            let bestStartIdx = 0;
             for (let i = 0; i < remaining.length; i++) {
-                const p = remaining[i][0];
-                const dx = p.x - cx, dy = p.y - cy;
-                const dist = dx * dx + dy * dy;
-                if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+                const candidate = nearestPathStartIndex(remaining[i], cx, cy);
+                if (candidate.dist < bestDist) {
+                    bestDist = candidate.dist;
+                    bestIdx = i;
+                    bestStartIdx = candidate.index;
+                }
             }
-            const chosen = remaining.splice(bestIdx, 1)[0];
+            const chosen = rotateClosedPath(remaining.splice(bestIdx, 1)[0], bestStartIdx);
             sorted.push(chosen);
-            const last = chosen[chosen.length - 1];
-            cx = last.x; cy = last.y;
+            const exit = toGC(chosen[0]);
+            cx = exit.x; cy = exit.y;
         }
         return sorted;
     }
@@ -1873,6 +1892,66 @@ self.onmessage = function(e) {
             cx = chosen.x; cy = chosen.y;
         }
         return sorted;
+    }
+
+    function distancePointToSegment(p, a, b) {
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len2 = dx * dx + dy * dy;
+        if (len2 < 1e-12) return Math.hypot(p.x - a.x, p.y - a.y);
+        let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+        t = Math.max(0, Math.min(1, t));
+        const px = a.x + t * dx;
+        const py = a.y + t * dy;
+        return Math.hypot(p.x - px, p.y - py);
+    }
+
+    function simplifyPolylineRDP(points, tol) {
+        if (points.length <= 2) return points.slice();
+
+        let maxDist = -1;
+        let splitIdx = -1;
+        const a = points[0];
+        const b = points[points.length - 1];
+
+        for (let i = 1; i < points.length - 1; i++) {
+            const dist = distancePointToSegment(points[i], a, b);
+            if (dist > maxDist) {
+                maxDist = dist;
+                splitIdx = i;
+            }
+        }
+
+        if (maxDist <= tol || splitIdx < 0) return [a, b];
+
+        const left = simplifyPolylineRDP(points.slice(0, splitIdx + 1), tol);
+        const right = simplifyPolylineRDP(points.slice(splitIdx), tol);
+        return left.slice(0, -1).concat(right);
+    }
+
+    function simplifyClosedPath(points, tol = 0.01) {
+        if (!points || points.length < 4) return points ? points.slice() : [];
+        let anchorIdx = 0;
+        let best = Infinity;
+        for (let i = 0; i < points.length; i++) {
+            const score = points[i].x * points[i].x + points[i].y * points[i].y;
+            if (score < best) {
+                best = score;
+                anchorIdx = i;
+            }
+        }
+        const rotated = rotateClosedPath(points, anchorIdx);
+        const open = rotated.concat([rotated[0]]);
+        const simplified = simplifyPolylineRDP(open, tol);
+        const closed = simplified.slice(0, -1);
+        return closed.length >= 3 ? closed : points.slice();
+    }
+
+    function optimizeIsolationPaths(paths, tol = 0.01) {
+        return paths
+            .filter(path => path.length >= 3)
+            .map(path => simplifyClosedPath(path, tol))
+            .filter(path => path.length >= 3);
     }
 
     function parseLinearMove(line) {
@@ -1929,6 +2008,95 @@ self.onmessage = function(e) {
                 out.push(line);
             }
         }
+        return out;
+    }
+
+    function parseMotionLine(line) {
+        const commentIdx = line.indexOf(';');
+        const code = (commentIdx >= 0 ? line.slice(0, commentIdx) : line).trim();
+        if (!code) return null;
+        const motion = code.match(/^(G0|G1|G2|G3)\b/);
+        if (!motion) return null;
+        const params = {};
+        for (const key of ['X', 'Y', 'Z', 'I', 'J', 'F']) {
+            const match = code.match(new RegExp(`\\b${key}(-?\\d+(?:\\.\\d+)?)\\b`));
+            if (match) params[key] = match[1];
+        }
+        return { cmd: motion[1], params, comment: commentIdx >= 0 ? line.slice(commentIdx).trim() : '' };
+    }
+
+    function formatMotionLine(parsed) {
+        const parts = [parsed.cmd];
+        for (const key of ['X', 'Y', 'Z', 'I', 'J', 'F']) {
+            if (parsed.params[key] !== undefined) parts.push(`${key}${parsed.params[key]}`);
+        }
+        return parsed.comment ? `${parts.join(' ')}  ${parsed.comment}` : parts.join(' ');
+    }
+
+    function compactNumericString(value) {
+        const n = parseFloat(value);
+        if (!isFinite(n)) return value;
+        if (Math.abs(n) < 5e-7) return '0';
+        return n.toString();
+    }
+
+    function optimizeMotionOutput(lines) {
+        const out = [];
+        let lastFeed = null;
+        let lastLinearSig = null;
+        let lastCmd = null;
+        let lastAxes = { X: null, Y: null, Z: null };
+
+        for (const line of lines) {
+            const motion = parseMotionLine(line);
+            if (!motion) {
+                out.push(line);
+                continue;
+            }
+
+            if ((motion.cmd === 'G1' || motion.cmd === 'G2' || motion.cmd === 'G3') && motion.params.F !== undefined) {
+                if (motion.params.F === lastFeed) delete motion.params.F;
+                else lastFeed = motion.params.F;
+            }
+
+            for (const key of Object.keys(motion.params)) {
+                motion.params[key] = compactNumericString(motion.params[key]);
+            }
+
+            if ((motion.cmd === 'G0' || motion.cmd === 'G1') && !motion.comment) {
+                const sig = JSON.stringify({ cmd: motion.cmd, X: motion.params.X, Y: motion.params.Y, Z: motion.params.Z });
+                if (sig === lastLinearSig) continue;
+                lastLinearSig = sig;
+            } else {
+                lastLinearSig = null;
+            }
+
+            if (motion.cmd === 'G0' || motion.cmd === 'G1') {
+                for (const axis of ['X', 'Y', 'Z']) {
+                    if (motion.params[axis] !== undefined && motion.params[axis] === lastAxes[axis]) {
+                        delete motion.params[axis];
+                    }
+                }
+            }
+
+            if (motion.cmd === lastCmd) motion.cmd = '';
+
+            if (!motion.cmd && Object.keys(motion.params).length === 0) {
+                if (motion.comment) out.push(motion.comment);
+                continue;
+            }
+
+            out.push(formatMotionLine(motion));
+
+            const effectiveCmd = motion.cmd || lastCmd;
+            if (effectiveCmd === 'G0' || effectiveCmd === 'G1') {
+                for (const axis of ['X', 'Y', 'Z']) {
+                    if (motion.params[axis] !== undefined) lastAxes[axis] = motion.params[axis];
+                }
+            }
+            if (effectiveCmd) lastCmd = effectiveCmd;
+        }
+
         return out;
     }
 
@@ -1991,7 +2159,8 @@ self.onmessage = function(e) {
         lines.push('');
         lines.push('; === ISOLATION ROUTING ===');
         // Sort loops nearest-neighbor from origin to cut rapid-travel moves.
-        const sorted = sortPathsNearestNeighbor(paths.filter(p => p.length >= 2), 0, 0);
+        const simplified = optimizeIsolationPaths(paths, 0.01);
+        const sorted = sortPathsNearestNeighbor(simplified.filter(p => p.length >= 2), 0, 0);
         for (const path of sorted) {
             const start = toGC(path[0]);
             lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
@@ -2005,7 +2174,7 @@ self.onmessage = function(e) {
         }
         const optimized = optimizeG1Moves(lines);
         lines.length = 0;
-        lines.push(...optimized);
+        lines.push(...optimizeMotionOutput(optimized));
     }
 
     // Build the sorted tab intervals (in arc-length space) from the tabs array.
@@ -2054,6 +2223,23 @@ self.onmessage = function(e) {
         return bestLen;
     }
 
+    function rotateToolpathToStartLen(startLen) {
+        if (!toolpath || !toolpath.length) return [];
+        const startPt = pointAtLength(startLen);
+        let bestIdx = 0;
+        let bestDist = Infinity;
+        for (let i = 0; i < toolpath.length; i++) {
+            const dx = toolpath[i].x - startPt.x;
+            const dy = toolpath[i].y - startPt.y;
+            const dist = dx * dx + dy * dy;
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestIdx = i;
+            }
+        }
+        return rotateClosedPath(toolpath, bestIdx).map(toGC);
+    }
+
     // Emit G-code lines for one full pass around the contour at depth passZ.
     // useTabs = true only on passes where we actually want gaps (typically the final pass).
     function emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f) {
@@ -2062,11 +2248,12 @@ self.onmessage = function(e) {
 
         if (!useTabs || !tabs.length) {
             const startLen = findOptimizedStartLen();
-            const start = toGC(pointAtLength(startLen));
+            const loop = rotateToolpathToStartLen(startLen);
+            const start = loop[0];
             lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
             lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
-            for (let walked = STEP; walked < total; walked += STEP) {
-                const pt = toGC(pointAtLength(startLen + walked));
+            for (let i = 1; i < loop.length; i++) {
+                const pt = loop[i];
                 lines.push(`G1 X${f(pt.x)} Y${f(pt.y)} F${feedRate}`);
             }
             lines.push(`G1 X${f(start.x)} Y${f(start.y)} F${feedRate}  ; close`);
@@ -2110,7 +2297,7 @@ self.onmessage = function(e) {
         lines.push(`G0 Z${f(safeZ)}  ; retract`);
         const optimized = optimizeG1Moves(lines);
         lines.length = 0;
-        lines.push(...optimized);
+        lines.push(...optimizeMotionOutput(optimized));
     }
 
     function generateGcode() {
@@ -2269,16 +2456,16 @@ self.onmessage = function(e) {
             lines.push('M30  ; end of program');
 
             gcodeTraces = gcodeOutline = gcodeDrill = '';
-            result = lines.join('\n');
+            result = optimizeMotionOutput(lines).join('\n');
         } else {
             // Three separate files — each is a standalone, valid GCode file
             function buildSectionFile(title, sectionLines) {
                 if (!sectionLines.length) return '';
-                return [
+                return optimizeMotionOutput([
                     ...makeHeader(title), '', ...makeStartup(),
                     ...sectionLines,
                     '', 'M5   ; spindle off', `G0 Z${f(safeZ)}`, 'M30  ; end of program',
-                ].join('\n');
+                ]).join('\n');
             }
 
             gcodeTraces  = hasIsolation ? buildSectionFile('Isolation Routing', isolationLines) : '';
