@@ -24,122 +24,675 @@
     <!-- Clipper.js: polygon offset/union (JS port of Angus Johnson's Clipper) -->
     <script src="https://cdn.jsdelivr.net/npm/clipper-lib@6.4.2/clipper.js"></script>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: system-ui, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
-            min-height: 100vh;
-            display: flex;
+        :root {
+            --bg: #0a0c0d;
+            --bg-2: #101416;
+            --panel: rgba(18, 24, 26, 0.9);
+            --panel-2: rgba(11, 15, 17, 0.9);
+            --panel-3: rgba(22, 29, 32, 0.78);
+            --line: rgba(183, 199, 189, 0.14);
+            --line-strong: rgba(212, 228, 218, 0.28);
+            --text: #ecf1eb;
+            --muted: #8e9c94;
+            --soft: #5d6963;
+            --accent: #e3ff6a;
+            --accent-2: #ff8c42;
+            --danger: #ff5d61;
+            --copper: #d49b39;
+            --drill: #74b4ff;
+            --success: #7dffae;
+            --shadow: 0 18px 60px rgba(0, 0, 0, 0.38);
+            --radius: 18px;
+            --radius-sm: 12px;
+            --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+            --display: "Bahnschrift Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
         }
-        .sidebar {
-            width: 280px;
-            background: #16213e;
-            padding: 20px;
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { min-height: 100%; }
+        body {
+            font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(200, 255, 110, 0.07), transparent 32%),
+                radial-gradient(circle at 85% 10%, rgba(255, 140, 66, 0.08), transparent 22%),
+                linear-gradient(180deg, #0b0e10 0%, #090a0b 100%);
+            overflow: hidden;
+        }
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background:
+                linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+            background-size: 100% 6px, 6px 100%;
+            opacity: 0.25;
+            mix-blend-mode: soft-light;
+        }
+        .app-shell {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            grid-template-columns: 300px minmax(0, 1fr);
+            gap: 14px;
+            padding: 14px;
+            height: 100vh;
+            align-items: start;
+        }
+        .control-rail {
             display: flex;
             flex-direction: column;
-            gap: 16px;
+            gap: 10px;
+            min-height: 0;
+            max-height: calc(100vh - 28px);
             overflow-y: auto;
-            max-height: 100vh;
+            padding-right: 4px;
+            scrollbar-gutter: stable;
         }
-        h1 { font-size: 1.4rem; color: #e94560; }
-        h2 { font-size: 0.8rem; color: #888; text-transform: uppercase; margin-bottom: 10px; }
+        .workspace-shell {
+            display: grid;
+            grid-template-rows: minmax(0, 1fr);
+            gap: 12px;
+            min-width: 0;
+            min-height: 100%;
+            height: 100%;
+            max-height: calc(100vh - 28px);
+        }
+        .brand-panel,
+        .rail-card,
+        .preview-frame,
+        .action-bar {
+            position: relative;
+            overflow: hidden;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+            box-shadow: var(--shadow);
+        }
+        .brand-panel::before,
+        .rail-card::before,
+        .preview-frame::before,
+        .action-bar::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: linear-gradient(135deg, rgba(255,255,255,0.06), transparent 28%, transparent 100%);
+        }
+        .brand-panel {
+            padding: 12px 14px 14px;
+            background:
+                linear-gradient(140deg, rgba(227,255,106,0.14), transparent 35%),
+                linear-gradient(180deg, rgba(19,24,26,0.94) 0%, rgba(9,12,14,0.96) 100%);
+            position: sticky;
+            top: 0;
+            z-index: 3;
+            flex: 0 0 auto;
+        }
+        .brand-kicker {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 8px;
+            border: 1px solid rgba(227,255,106,0.28);
+            border-radius: 999px;
+            font-size: 0.64rem;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            color: var(--accent);
+            background: rgba(227,255,106,0.06);
+            margin-bottom: 8px;
+        }
+        h1 {
+            font-family: var(--display);
+            font-size: 1.6rem;
+            line-height: 0.92;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+        .brand-copy {
+            font-size: 0.82rem;
+            line-height: 1.35;
+            color: var(--muted);
+            max-width: 34ch;
+        }
+        .rail-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-height: 0;
+        }
+        .rail-card {
+            padding: 12px;
+            flex: 0 0 auto;
+        }
+        .rail-card.compact { padding-bottom: 12px; }
+        .section-step {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            color: var(--soft);
+            font-size: 0.64rem;
+            text-transform: uppercase;
+            letter-spacing: 0.16em;
+        }
+        .section-step::before {
+            content: "";
+            width: 18px;
+            height: 1px;
+            background: var(--line-strong);
+        }
+        h2 {
+            font-family: var(--display);
+            font-size: 0.92rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text);
+            margin-bottom: 8px;
+        }
+        .section-subtle {
+            color: var(--soft);
+            font-size: 0.64rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+        }
         .drop-zone {
-            border: 2px dashed #444;
-            border-radius: 8px;
-            padding: 20px 16px;
-            text-align: center;
+            border: 1px dashed rgba(255,255,255,0.16);
+            border-radius: 14px;
+            padding: 12px;
+            text-align: left;
             cursor: pointer;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.015));
+            transition: border-color 180ms ease, transform 180ms ease, background 180ms ease;
         }
-        .drop-zone:hover, .drop-zone.drag-over { border-color: #e94560; background: rgba(233,69,96,0.1); }
-        .drop-zone.loaded { border-color: #4ade80; background: rgba(74,222,128,0.1); }
-        .drop-zone.copper-loaded { border-color: #c8922a; background: rgba(200,146,42,0.1); }
-        .drop-zone.drill-loaded  { border-color: #5ba3f5; background: rgba(91,163,245,0.1); }
-        .copper-filename { font-size: 0.8rem; color: #c8922a; margin-top: 8px; word-break: break-all; }
-        .drill-filename  { font-size: 0.8rem; color: #5ba3f5; margin-top: 8px; word-break: break-all; }
-        .drop-zone-text { font-size: 0.9rem; color: #888; }
-        .filename { font-size: 0.8rem; color: #4ade80; margin-top: 8px; word-break: break-all; }
+        .drop-zone:hover,
+        .drop-zone.drag-over {
+            border-color: rgba(227,255,106,0.55);
+            background: linear-gradient(180deg, rgba(227,255,106,0.08), rgba(255,255,255,0.03));
+            transform: translateY(-1px);
+        }
+        .drop-zone.loaded {
+            border-color: rgba(125,255,174,0.42);
+            background: linear-gradient(180deg, rgba(125,255,174,0.1), rgba(255,255,255,0.02));
+        }
+        .drop-zone.copper-loaded {
+            border-color: rgba(212,155,57,0.5);
+            background: linear-gradient(180deg, rgba(212,155,57,0.12), rgba(255,255,255,0.02));
+        }
+        .drop-zone.drill-loaded {
+            border-color: rgba(116,180,255,0.5);
+            background: linear-gradient(180deg, rgba(116,180,255,0.12), rgba(255,255,255,0.02));
+        }
+        .drop-zone-text {
+            font-family: var(--display);
+            font-size: 0.88rem;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--text);
+            margin-bottom: 2px;
+        }
+        .drop-zone::after {
+            content: "Drag, drop, or click";
+            display: block;
+            font-size: 0.7rem;
+            color: var(--soft);
+            margin-top: 2px;
+        }
+        .filename,
+        .copper-filename,
+        .drill-filename {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(255,255,255,0.08);
+            font-family: var(--mono);
+            font-size: 0.68rem;
+            word-break: break-word;
+        }
+        .filename { color: var(--success); }
+        .copper-filename { color: var(--copper); }
+        .drill-filename { color: var(--drill); }
         .input-group { margin-bottom: 10px; }
-        .input-group label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 4px; }
+        .input-group label {
+            display: block;
+            font-size: 0.66rem;
+            color: var(--muted);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+        }
         .input-row { display: flex; gap: 8px; align-items: center; }
-        input[type="number"] {
-            flex: 1; padding: 8px; border: 1px solid #333; border-radius: 4px;
-            background: #1a1a2e; color: #eee; font-size: 0.9rem;
-        }
-        input:focus { outline: none; border-color: #e94560; }
-        .unit { font-size: 0.8rem; color: #666; min-width: 30px; }
-        button {
-            width: 100%; padding: 12px; border: none; border-radius: 6px;
-            font-size: 0.9rem; font-weight: 600; cursor: pointer;
-        }
-        .btn-primary { background: #e94560; color: white; }
-        .btn-primary:hover:not(:disabled) { background: #d13652; }
-        .btn-primary:disabled { background: #444; color: #888; cursor: not-allowed; }
-        .btn-secondary {
-            background: #1a1a2e; color: #eee; border: 1px solid #444;
-            padding: 8px; font-size: 0.8rem; font-weight: 500;
-        }
-        .btn-secondary:hover { background: #252545; border-color: #666; }
-        .btn-tab-mode {
-            background: #1a1a2e; color: #eee; border: 1px solid #444;
-            padding: 10px; font-size: 0.85rem; font-weight: 600;
-        }
-        .btn-tab-mode.active { background: rgba(74,222,128,0.15); border-color: #4ade80; color: #4ade80; }
-        .btn-tab-mode:hover { border-color: #4ade80; }
-        .btn-row { display: flex; gap: 8px; }
-        .btn-row button { flex: 1; }
-        .drop-zone-actions { margin-top: 8px; }
-        .drop-zone-actions button { width: 100%; }
-        .info-row { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 6px; }
-        .info-label { color: #888; }
-        .info-value { color: #eee; }
-        .hint { font-size: 0.75rem; color: #555; margin-top: 4px; }
-        #vbitPreview { display: block; width: 240px; height: 148px; border-radius: 6px; margin: 8px 0 4px; }
-        .computing-msg { font-size: 0.75rem; color: #f5a623; margin-top: 6px; display: none; }
-        .error { font-size: 0.8rem; color: #e94560; margin-top: 6px; }
+        input[type="number"],
         textarea {
-            width: 100%; height: 160px; background: #1a1a2e; color: #4ade80;
-            border: 1px solid #333; border-radius: 4px; padding: 8px;
-            font-family: monospace; font-size: 0.75rem; resize: vertical;
+            width: 100%;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            background: rgba(3, 5, 6, 0.68);
+            color: var(--text);
+            font-family: var(--mono);
         }
-        .preview { flex: 1; position: relative; overflow: hidden; }
+        input[type="number"] {
+            flex: 1;
+            padding: 8px 10px;
+            font-size: 0.82rem;
+        }
+        input:focus,
+        textarea:focus {
+            outline: none;
+            border-color: rgba(227,255,106,0.5);
+            box-shadow: 0 0 0 3px rgba(227,255,106,0.08);
+        }
+        .unit {
+            min-width: 40px;
+            color: var(--soft);
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        button {
+            width: 100%;
+            border: 1px solid transparent;
+            border-radius: 12px;
+            padding: 9px 12px;
+            font-size: 0.76rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, opacity 160ms ease;
+        }
+        button:hover { transform: translateY(-1px); }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent) 0%, #9dd62f 100%);
+            color: #111610;
+            border-color: rgba(227,255,106,0.55);
+        }
+        .btn-primary:disabled {
+            background: rgba(255,255,255,0.08);
+            color: var(--soft);
+            border-color: rgba(255,255,255,0.06);
+            cursor: not-allowed;
+            transform: none;
+        }
+        .btn-secondary,
+        .btn-tab-mode {
+            background: rgba(255,255,255,0.035);
+            color: var(--text);
+            border-color: rgba(255,255,255,0.12);
+        }
+        .btn-secondary:hover,
+        .btn-tab-mode:hover { border-color: rgba(227,255,106,0.35); }
+        .btn-tab-mode.active {
+            background: rgba(227,255,106,0.12);
+            border-color: rgba(227,255,106,0.45);
+            color: var(--accent);
+        }
+        .btn-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 8px;
+        }
+        .drop-zone-actions { margin-top: 8px; }
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: baseline;
+            padding: 7px 8px;
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 12px;
+            background: rgba(255,255,255,0.025);
+            font-size: 0.78rem;
+            margin-bottom: 0;
+        }
+        .info-label {
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-size: 0.62rem;
+        }
+        .info-value {
+            font-family: var(--mono);
+            color: var(--text);
+            text-align: right;
+        }
+        .hint {
+            font-size: 0.68rem;
+            color: var(--soft);
+            margin-top: 4px;
+            line-height: 1.35;
+        }
+        #vbitPreview {
+            display: block;
+            width: 100%;
+            max-width: 100%;
+            height: 156px;
+            border-radius: 16px;
+            margin: 8px 0 4px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(3, 5, 6, 0.68);
+        }
+        .computing-msg {
+            font-size: 0.66rem;
+            color: var(--accent-2);
+            margin-top: 6px;
+            display: none;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .error {
+            font-size: 0.68rem;
+            color: var(--danger);
+            margin-top: 6px;
+            line-height: 1.4;
+        }
+        textarea {
+            min-height: 220px;
+            padding: 12px;
+            font-size: 0.72rem;
+            resize: vertical;
+            line-height: 1.45;
+        }
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+        .summary-stat {
+            padding: 8px 10px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.035);
+            min-width: 0;
+        }
+        .summary-stat label {
+            display: block;
+            font-size: 0.58rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--soft);
+            margin-bottom: 4px;
+        }
+        .summary-stat span {
+            font-family: var(--display);
+            font-size: 0.92rem;
+            letter-spacing: 0.04em;
+            display: block;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .command-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: stretch;
+        }
+        .header-tools {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-start;
+        }
+        .output-mode-row {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            margin-bottom: 0;
+        }
+        .output-mode-opt {
+            padding: 8px 8px;
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 0.72rem;
+            color: var(--muted);
+            background: rgba(255,255,255,0.03);
+            text-align: center;
+            user-select: none;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .output-mode-opt input[type="radio"] { display: none; }
+        .output-mode-opt:has(input:checked) {
+            border-color: rgba(227,255,106,0.35);
+            color: var(--accent);
+            background: rgba(227,255,106,0.08);
+        }
+        .workspace-main {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 12px;
+            min-height: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+        .preview-frame {
+            min-height: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            padding: 12px;
+            overflow: hidden;
+            flex: 1 1 auto;
+            background:
+                radial-gradient(circle at top left, rgba(40, 229, 163, 0.08), transparent 28%),
+                radial-gradient(circle at 90% 0%, rgba(116, 180, 255, 0.09), transparent 24%),
+                linear-gradient(180deg, rgba(14, 20, 23, 0.96), rgba(7, 10, 12, 0.98));
+        }
+        .preview-topline {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        .preview-title {
+            font-family: var(--display);
+            font-size: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+        }
+        .preview-meta {
+            color: #95a8a0;
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+        }
+        .preview-legend {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+        .legend-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.03);
+            color: #a7b5ae;
+            font-size: 0.62rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+        .legend-swatch {
+            width: 9px;
+            height: 9px;
+            border-radius: 999px;
+            box-shadow: 0 0 10px currentColor;
+        }
+        .preview {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            min-height: 0;
+            height: 100%;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);
+            background:
+                radial-gradient(circle at 50% 0%, rgba(44, 229, 170, 0.09), transparent 30%),
+                radial-gradient(circle at 100% 100%, rgba(116, 180, 255, 0.08), transparent 26%),
+                linear-gradient(180deg, rgba(13,19,22,0.96), rgba(6,8,10,1));
+        }
         #preview { width: 100%; height: 100%; display: block; cursor: grab; }
         #preview.panning { cursor: grabbing; }
         #preview.tab-mode { cursor: crosshair; }
-        .preview-hint { position: absolute; bottom: 10px; left: 10px; font-size: 0.75rem; color: #444; pointer-events: none; }
-        .tab-hint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-            background: rgba(74,222,128,0.15); border: 1px solid #4ade80; color: #4ade80;
-            padding: 6px 14px; border-radius: 20px; font-size: 0.8rem; pointer-events: none;
-            display: none; }
+        .preview-hint {
+            position: absolute;
+            left: 14px;
+            bottom: 14px;
+            padding: 6px 9px;
+            border-radius: 12px;
+            background: rgba(0,0,0,0.34);
+            border: 1px solid rgba(255,255,255,0.08);
+            font-size: 0.64rem;
+            color: var(--soft);
+            pointer-events: none;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .tab-hint {
+            position: absolute;
+            top: 14px;
+            left: 50%;
+            transform: translateX(-50%);
+            max-width: calc(100% - 32px);
+            background: rgba(227,255,106,0.13);
+            border: 1px solid rgba(227,255,106,0.28);
+            color: var(--accent);
+            padding: 8px 12px;
+            border-radius: 999px;
+            font-size: 0.68rem;
+            pointer-events: none;
+            display: none;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .rail-actions {
+            margin-top: auto;
+        }
+        .action-bar {
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            flex-wrap: wrap;
+            align-items: stretch;
+            justify-content: flex-start;
+            gap: 10px;
+        }
+        .action-copy {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .action-copy p {
+            font-size: 0.68rem;
+            color: var(--soft);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+        .export-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: flex-start;
+        }
+        .export-actions button {
+            width: auto;
+            min-width: 132px;
+        }
+        .buffer-shell {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
         input[type="file"] { display: none; }
-        .hidden { display: none; }
-        .section-divider { border: none; border-top: 1px solid #2a2a4e; }
-        .tab-list { list-style: none; margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+        .hidden { display: none !important; }
+        .section-divider { border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 2px 0; }
+        .tab-list { list-style: none; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
         .tab-item {
-            display: flex; justify-content: space-between; align-items: center;
-            background: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 4px;
-            padding: 5px 8px; font-size: 0.8rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255,255,255,0.035);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 7px 8px;
+            font-size: 0.74rem;
         }
-        .tab-item span { color: #aaa; }
-        .tab-remove { background: none; border: none; color: #e94560; cursor: pointer;
-            font-size: 1rem; padding: 0 4px; width: auto; font-weight: bold; }
-        .tab-remove:hover { color: #ff6b85; }
-        .output-mode-row { display: flex; gap: 6px; margin-bottom: 10px; }
-        .output-mode-opt {
-            flex: 1; padding: 7px 4px; border: 1px solid #444; border-radius: 6px;
-            cursor: pointer; font-size: 0.8rem; color: #888; background: #1a1a2e;
-            text-align: center; user-select: none;
+        .tab-item span { color: var(--muted); }
+        .tab-remove {
+            width: auto;
+            padding: 0;
+            border: none;
+            background: none;
+            color: var(--danger);
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: bold;
         }
-        .output-mode-opt input[type="radio"] { display: none; }
-        .output-mode-opt:has(input:checked) { border-color: #e94560; color: #eee; }
+        .tab-remove:hover { color: #ff8e90; }
+        @media (max-width: 1180px) {
+            .app-shell { grid-template-columns: 280px minmax(0, 1fr); }
+            .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .command-actions { width: 100%; }
+            .preview-legend { justify-content: flex-start; }
+        }
+        @media (max-width: 920px) {
+            body { overflow: auto; }
+            .app-shell {
+                grid-template-columns: 1fr;
+                padding: 12px;
+                height: auto;
+            }
+            .control-rail,
+            .workspace-shell {
+                overflow: visible;
+                max-height: none;
+            }
+            .control-rail { max-height: none; }
+            .brand-panel { position: static; }
+            .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .preview { min-height: 52vh; }
+            .preview-topline {
+                flex-direction: column;
+            }
+            .preview-legend {
+                justify-content: flex-start;
+            }
+            .export-actions button {
+                width: 100%;
+                min-width: 0;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="sidebar">
-        <h1>PCBMiller</h1>
+    <div class="app-shell">
+        <aside class="control-rail">
+            <div class="brand-panel">
+                <div class="brand-kicker">PCB Toolchain</div>
+                <h1>PCBMiller</h1>
+                <p class="brand-copy">Browser-based Gerber, drill, and outline milling with preview-first controls.</p>
+            </div>
 
+            <div class="rail-grid">
         <!-- File Upload -->
-        <div>
+        <div class="rail-card compact">
+            <div class="section-step">Step 01</div>
             <h2>Edge Cuts File</h2>
             <div class="drop-zone" id="dropZone">
                 <div class="drop-zone-text">Drop .GKO / .gbr / Edge_Cuts</div>
@@ -151,11 +704,10 @@
             <div class="error" id="errorMsg"></div>
         </div>
 
-        <hr class="section-divider">
-
         <!-- Copper Layer (optional) -->
-        <div>
-            <h2>Copper Layer <span style="color:#555;font-size:0.7rem;text-transform:none">(optional)</span></h2>
+        <div class="rail-card compact">
+            <div class="section-step">Step 02</div>
+            <h2>Copper Layer <span class="section-subtle">(optional)</span></h2>
             <div class="drop-zone" id="copperDropZone">
                 <div class="drop-zone-text">Drop F_Cu.svg or F_Cu.gbr</div>
                 <div class="copper-filename" id="copperFilename"></div>
@@ -167,8 +719,9 @@
         </div>
 
         <!-- Drill File (optional) -->
-        <div>
-            <h2>Drill File <span style="color:#555;font-size:0.7rem;text-transform:none">(optional)</span></h2>
+        <div class="rail-card compact">
+            <div class="section-step">Step 03</div>
+            <h2>Drill File <span class="section-subtle">(optional)</span></h2>
             <div class="drop-zone" id="drillDropZone">
                 <div class="drop-zone-text">Drop .drl / .exc / PTH.drl</div>
                 <div class="drill-filename" id="drillFilename"></div>
@@ -180,7 +733,8 @@
         </div>
 
         <!-- Isolation parameters (shown after copper file loads) -->
-        <div id="isolationSection" class="hidden">
+        <div id="isolationSection" class="rail-card hidden">
+            <div class="section-step">Step 04</div>
             <h2>Isolation Routing</h2>
             <div class="input-group">
                 <label>V-Bit Angle</label>
@@ -243,7 +797,8 @@
         </div>
 
         <!-- Machine Parameters (shown once any file is loaded) -->
-        <div id="machineSection" class="hidden">
+        <div id="machineSection" class="rail-card hidden">
+            <div class="section-step">Step 05</div>
             <h2>Machine Parameters</h2>
             <div class="input-group">
                 <label>Safe Z Height</label>
@@ -280,7 +835,7 @@
         </div>
 
         <!-- Drilling Parameters (shown after drill file loads) -->
-        <div id="drillSection" class="hidden">
+        <div id="drillSection" class="rail-card hidden">
             <h2>Drilling</h2>
             <div class="input-group">
                 <label>Required Drill Bits</label>
@@ -305,7 +860,7 @@
         </div>
 
         <!-- Edge Cut Parameters (shown only when an edge cuts file is loaded) -->
-        <div id="paramsSection" class="hidden">
+        <div id="paramsSection" class="rail-card hidden">
             <h2>Edge Cut Parameters</h2>
             <div class="input-group">
                 <label>Tool Diameter</label>
@@ -341,7 +896,7 @@
         </div>
 
         <!-- Tabs (shown after file loads) -->
-        <div id="tabsSection" class="hidden">
+        <div id="tabsSection" class="rail-card hidden">
             <h2>Tabs</h2>
             <div class="input-group">
                 <label>Tab Width</label>
@@ -364,21 +919,25 @@
         </div>
 
         <!-- Board Info (shown after file loads) -->
-        <div id="infoSection" class="hidden">
+        <div id="infoSection" class="rail-card hidden">
             <h2>Board Info</h2>
-            <div class="info-row"><span class="info-label">Width</span><span class="info-value" id="infoWidth">—</span></div>
-            <div class="info-row"><span class="info-label">Height</span><span class="info-value" id="infoHeight">—</span></div>
-            <div class="info-row"><span class="info-label">Contours</span><span class="info-value" id="infoContours">—</span></div>
-            <div class="info-row"><span class="info-label">Passes</span><span class="info-value" id="infoPasses">—</span></div>
-            <div class="info-row" id="infoTracesRow" style="display:none"><span class="info-label">Traces</span><span class="info-value" id="infoTraces">—</span></div>
-            <div class="info-row" id="infoIsoPathsRow" style="display:none"><span class="info-label">Iso paths</span><span class="info-value" id="infoIsoPaths">—</span></div>
-            <div class="info-row" id="infoDrillRow" style="display:none"><span class="info-label">Drill holes</span><span class="info-value" id="infoDrillCount">—</span></div>
-            <div class="info-row"><span class="info-label">Est. run time</span><span class="info-value" id="infoRunTime">—</span></div>
+            <div class="info-grid">
+                <div class="info-row"><span class="info-label">Width</span><span class="info-value" id="infoWidth">—</span></div>
+                <div class="info-row"><span class="info-label">Height</span><span class="info-value" id="infoHeight">—</span></div>
+                <div class="info-row"><span class="info-label">Contours</span><span class="info-value" id="infoContours">—</span></div>
+                <div class="info-row"><span class="info-label">Passes</span><span class="info-value" id="infoPasses">—</span></div>
+                <div class="info-row" id="infoTracesRow" style="display:none"><span class="info-label">Traces</span><span class="info-value" id="infoTraces">—</span></div>
+                <div class="info-row" id="infoIsoPathsRow" style="display:none"><span class="info-label">Iso paths</span><span class="info-value" id="infoIsoPaths">—</span></div>
+                <div class="info-row" id="infoDrillRow" style="display:none"><span class="info-label">Drill holes</span><span class="info-value" id="infoDrillCount">—</span></div>
+                <div class="info-row"><span class="info-label">Est. run time</span><span class="info-value" id="infoRunTime">—</span></div>
+            </div>
             <hr class="section-divider">
         </div>
 
         <!-- Output mode (shown once any file is loaded) -->
-        <div id="outputModeSection" class="hidden">
+        <div id="outputModeSection" class="rail-card hidden">
+            <div class="section-step">Step 06</div>
+            <h2>Export Mode</h2>
             <div class="output-mode-row">
                 <label class="output-mode-opt">
                     <input type="radio" name="outputMode" id="modeCombined" value="combined" checked>
@@ -391,26 +950,67 @@
             </div>
         </div>
 
-        <button class="btn-primary" id="generateBtn" disabled>Generate G-code</button>
-
-        <!-- G-code Output (shown after generate) -->
-        <div id="gcodeSection" class="hidden">
-            <h2>G-code Output</h2>
-            <textarea id="gcodeOutput" readonly spellcheck="false"></textarea>
-            <div class="btn-row" style="margin-top: 8px;">
-                <button class="btn-secondary" id="copyBtn">Copy</button>
-                <button class="btn-secondary" id="downloadBtn">Download .nc</button>
-                <button class="btn-secondary hidden" id="downloadTracesBtn">Traces.nc</button>
-                <button class="btn-secondary hidden" id="downloadDrillBtn">Drill.nc</button>
-                <button class="btn-secondary hidden" id="downloadOutlineBtn">Outline.nc</button>
+        <div class="rail-card rail-actions">
+            <div class="section-step">Run</div>
+            <h2>Generate</h2>
+            <div class="summary-grid" style="margin-bottom:10px;">
+                <div class="summary-stat"><label>Board</label><span id="headerBoardDims">—</span></div>
+                <div class="summary-stat"><label>Runtime</label><span id="headerRunTime">—</span></div>
+                <div class="summary-stat"><label>Isolation</label><span id="headerIsoPaths">—</span></div>
+                <div class="summary-stat"><label>Drills</label><span id="headerDrillCount">—</span></div>
+            </div>
+            <div class="command-actions">
+                <button class="btn-primary" id="generateBtn" disabled>Generate G-code</button>
+                <div class="header-tools">
+                    <button class="btn-secondary hidden" id="copyBtn">Copy</button>
+                    <button class="btn-secondary hidden" id="downloadBtn">Download .nc</button>
+                    <button class="btn-secondary hidden" id="downloadTracesBtn">Traces.nc</button>
+                    <button class="btn-secondary hidden" id="downloadDrillBtn">Drill.nc</button>
+                    <button class="btn-secondary hidden" id="downloadOutlineBtn">Outline.nc</button>
+                </div>
             </div>
         </div>
-    </div>
 
-    <div class="preview">
-        <canvas id="preview"></canvas>
-        <div class="preview-hint" id="previewHint">Scroll to zoom &middot; Drag to pan</div>
-        <div class="tab-hint" id="tabHint">Click on the red toolpath to place a tab &mdash; click the button again to exit</div>
+        <div id="gcodeSection" class="rail-card action-bar hidden">
+            <div class="action-copy">
+                <h2>G-code Ready</h2>
+                <p>Generated output is ready. Open the raw buffer only when you need to inspect or copy it.</p>
+            </div>
+            <div class="export-actions">
+                <button class="btn-secondary" id="openBufferBtn">Show Buffer</button>
+            </div>
+            <div class="buffer-shell hidden" id="bufferShell">
+                <textarea id="gcodeOutput" readonly spellcheck="false"></textarea>
+            </div>
+        </div>
+            </div>
+        </aside>
+
+        <main class="workspace-shell">
+            <section class="workspace-main">
+                <div class="preview-frame">
+                    <div class="preview-topline">
+                        <div>
+                            <div class="preview-title">Toolpath Stage</div>
+                            <div class="preview-meta" id="previewMeta">Live board render with separated copper, isolation, drills, tabs, and outline passes</div>
+                        </div>
+                        <div class="preview-legend">
+                            <div class="legend-chip"><span class="legend-swatch" style="color:#ffb14a;background:#ffb14a"></span>Copper</div>
+                            <div class="legend-chip"><span class="legend-swatch" style="color:#29e5a3;background:#29e5a3"></span>Isolation</div>
+                            <div class="legend-chip"><span class="legend-swatch" style="color:#7f8ea3;background:#7f8ea3"></span>Board</div>
+                            <div class="legend-chip"><span class="legend-swatch" style="color:#74b4ff;background:#74b4ff"></span>Edge Cut</div>
+                            <div class="legend-chip"><span class="legend-swatch" style="color:#d9a6ff;background:#d9a6ff"></span>Drill</div>
+                            <div class="legend-chip"><span class="legend-swatch" style="color:#e3ff6a;background:#e3ff6a"></span>Tabs</div>
+                        </div>
+                    </div>
+                    <div class="preview">
+                        <canvas id="preview"></canvas>
+                        <div class="preview-hint" id="previewHint">Scroll to zoom · Drag to pan</div>
+                        <div class="tab-hint" id="tabHint">Click on the red toolpath to place a tab · click the button again to exit</div>
+                    </div>
+                </div>
+            </section>
+        </main>
     </div>
 
     <script type="module">
@@ -464,6 +1064,7 @@
     const tabsSection    = document.getElementById('tabsSection');
     const infoSection    = document.getElementById('infoSection');
     const gcodeSection   = document.getElementById('gcodeSection');
+    const bufferShell    = document.getElementById('bufferShell');
     const generateBtn    = document.getElementById('generateBtn');
     const gcodeOutput    = document.getElementById('gcodeOutput');
     const copyBtn        = document.getElementById('copyBtn');
@@ -476,6 +1077,10 @@
     const infoIsoPaths   = document.getElementById('infoIsoPaths');
     const infoDrillCount = document.getElementById('infoDrillCount');
     const infoRunTime    = document.getElementById('infoRunTime');
+    const headerBoardDims = document.getElementById('headerBoardDims');
+    const headerRunTime   = document.getElementById('headerRunTime');
+    const headerIsoPaths  = document.getElementById('headerIsoPaths');
+    const headerDrillCount= document.getElementById('headerDrillCount');
     const copperDropZone    = document.getElementById('copperDropZone');
     const copperFileInput   = document.getElementById('copperFileInput');
     const copperFilenameEl  = document.getElementById('copperFilename');
@@ -493,6 +1098,7 @@
     const downloadTracesBtn = document.getElementById('downloadTracesBtn');
     const downloadDrillBtn  = document.getElementById('downloadDrillBtn');
     const downloadOutlineBtn= document.getElementById('downloadOutlineBtn');
+    const openBufferBtn     = document.getElementById('openBufferBtn');
     const tabModeBtn     = document.getElementById('tabModeBtn');
     const tabList        = document.getElementById('tabList');
     const tabHint        = document.getElementById('tabHint');
@@ -561,7 +1167,13 @@
 
         if (!hasAny) {
             hide(gcodeSection);
+            hide(bufferShell);
             gcodeOutput.value = '';
+            copyBtn.classList.add('hidden');
+            downloadBtn.classList.add('hidden');
+            downloadTracesBtn.classList.add('hidden');
+            downloadDrillBtn.classList.add('hidden');
+            downloadOutlineBtn.classList.add('hidden');
             infoWidth.textContent = '—';
             infoHeight.textContent = '—';
             infoContours.textContent = '—';
@@ -570,6 +1182,10 @@
             infoIsoPaths.textContent = '—';
             infoDrillCount.textContent = '—';
             infoRunTime.textContent = '—';
+            headerBoardDims.textContent = '—';
+            headerRunTime.textContent = '—';
+            headerIsoPaths.textContent = '—';
+            headerDrillCount.textContent = '—';
             return;
         }
 
@@ -582,6 +1198,9 @@
         infoTraces.textContent = hasCopper ? copperSegments.length + copperFlashes.length + copperRegions.length : '—';
         infoIsoPaths.textContent = hasCopper ? copperToolpaths.length : '—';
         infoDrillCount.textContent = hasDrill ? drillHoles.length : '—';
+        headerBoardDims.textContent = dims ? `${dims.width.toFixed(1)}×${dims.height.toFixed(1)}` : '—';
+        headerIsoPaths.textContent = hasCopper ? String(copperToolpaths.length) : '—';
+        headerDrillCount.textContent = hasDrill ? String(drillHoles.length) : '—';
         updateRuntimeEstimate();
     }
 
@@ -636,7 +1255,9 @@
             }
         }
 
-        infoRunTime.textContent = formatMinutes(minutes);
+        const runtime = formatMinutes(minutes);
+        infoRunTime.textContent = runtime;
+        headerRunTime.textContent = runtime;
     }
 
     function clearEdgeFile() {
@@ -1684,6 +2305,21 @@ self.onmessage = function(e) {
         ctx.translate(viewOffX, viewOffY);
         ctx.scale(viewScale, viewScale);
 
+        const dims = boardBounds || copperBounds;
+        if (dims) {
+            const pad = 6 / viewScale;
+            const x = dims.minX - pad;
+            const y = dims.minY - pad;
+            const w = dims.width + pad * 2;
+            const h = dims.height + pad * 2;
+            const stageGlow = ctx.createLinearGradient(x, y, x + w, y + h);
+            stageGlow.addColorStop(0, 'rgba(41,229,163,0.06)');
+            stageGlow.addColorStop(0.55, 'rgba(20,28,32,0.0)');
+            stageGlow.addColorStop(1, 'rgba(116,180,255,0.05)');
+            ctx.fillStyle = stageGlow;
+            ctx.fillRect(x, y, w, h);
+        }
+
         // Isolation toolpaths — drawn at the actual cut width produced by the V-bit
         // (tip diameter + 2 × depth × tan(half-angle)), not just the tip diameter
         if (copperToolpaths.length) {
@@ -1691,7 +2327,7 @@ self.onmessage = function(e) {
             const angle    = parseFloat(document.getElementById('vbitAngle').value) || 30;
             const depth    = Math.abs(parseFloat(document.getElementById('isoDepth').value) || 0.05);
             const cutWidth = tipDiam + 2 * depth * Math.tan((angle / 2) * (Math.PI / 180));
-            ctx.strokeStyle = 'rgba(220, 180, 30, 0.85)';
+            ctx.strokeStyle = 'rgba(41, 229, 163, 0.82)';
             ctx.lineWidth   = cutWidth;  // world-space width = actual cut width at this depth
             ctx.lineCap     = 'round';
             ctx.lineJoin    = 'round';
@@ -1702,13 +2338,18 @@ self.onmessage = function(e) {
                 for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
                 ctx.closePath();
                 ctx.stroke();
+                ctx.strokeStyle = 'rgba(181, 255, 228, 0.25)';
+                ctx.lineWidth = Math.max(cutWidth * 0.22, 0.02);
+                ctx.stroke();
+                ctx.strokeStyle = 'rgba(41, 229, 163, 0.82)';
+                ctx.lineWidth = cutWidth;
             }
             ctx.lineCap   = 'butt';
             ctx.lineJoin  = 'miter';
         }
 
         // Copper — regions (KiCad 6+ polygon fills), then strokes, then flashes
-        ctx.fillStyle = 'rgba(200,146,42,0.85)';
+        ctx.fillStyle = 'rgba(255,177,74,0.88)';
         for (const region of copperRegions) {
             if (region.length < 3) continue;
             ctx.beginPath();
@@ -1721,7 +2362,7 @@ self.onmessage = function(e) {
             ctx.beginPath();
             ctx.moveTo(seg.x1, seg.y1);
             ctx.lineTo(seg.x2, seg.y2);
-            ctx.strokeStyle = 'rgba(200,146,42,0.85)';
+            ctx.strokeStyle = 'rgba(255,177,74,0.9)';
             ctx.lineWidth = seg.r * 2;
             ctx.lineCap = 'round';
             ctx.stroke();
@@ -1734,19 +2375,22 @@ self.onmessage = function(e) {
             ctx.moveTo(poly[0].x, poly[0].y);
             for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
             ctx.closePath();
-            ctx.fillStyle = 'rgba(200,146,42,0.85)';
+            ctx.fillStyle = 'rgba(255,177,74,0.9)';
             ctx.fill();
         }
 
-        // Board outline (blue)
+        // Board contour
         for (const contour of parsedContours) {
-            drawPolyline(contour, '#4a90d9', 1);
+            ctx.save();
+            ctx.setLineDash([1.4 / viewScale, 1.4 / viewScale]);
+            drawPolyline(contour, 'rgba(184, 198, 214, 0.98)', 1.2);
+            ctx.restore();
         }
 
-        // Drill holes — purple circle outlines + crosshairs, sized to actual drill diameter
+        // Drill holes
         if (drillHoles.length) {
-            ctx.strokeStyle = '#a78bfa';
-            ctx.lineWidth   = 0.05;
+            ctx.strokeStyle = '#d9a6ff';
+            ctx.lineWidth   = 0.06;
             ctx.lineCap     = 'round';
             for (const h of drillHoles) {
                 const r = h.r > 0 ? h.r : 0.4;
@@ -1761,12 +2405,12 @@ self.onmessage = function(e) {
             ctx.lineCap = 'butt';
         }
 
-        // Toolpath (red — offset from board edge by tool radius)
+        // Edge cut toolpath
         if (toolpath) {
-            drawPolyline(toolpath, '#e94560', 2);
+            drawPolyline(toolpath, '#74b4ff', 2.6);
         }
 
-        // Tabs (green tick marks perpendicular to the toolpath)
+        // Tabs
         if (toolpath && tabs.length) {
             const total = toolpathLens[toolpathLens.length - 1];
             for (const tab of tabs) {
@@ -1790,7 +2434,7 @@ self.onmessage = function(e) {
                 ctx.beginPath();
                 ctx.moveTo(s.x, s.y);
                 ctx.lineTo(e.x, e.y);
-                ctx.strokeStyle = '#4ade80';
+                ctx.strokeStyle = '#e3ff6a';
                 ctx.lineWidth = 4 / viewScale;
                 ctx.stroke();
 
@@ -1799,7 +2443,7 @@ self.onmessage = function(e) {
                 ctx.beginPath();
                 ctx.moveTo(pt.x - tny * tickSize, pt.y + tnx * tickSize);
                 ctx.lineTo(pt.x + tny * tickSize, pt.y - tnx * tickSize);
-                ctx.strokeStyle = '#4ade80';
+                ctx.strokeStyle = '#e3ff6a';
                 ctx.lineWidth = 1.5 / viewScale;
                 ctx.stroke();
             }
@@ -2732,120 +3376,170 @@ self.onmessage = function(e) {
         const tipDiam = Math.max(0, parseFloat(document.getElementById('isoToolDiam').value) || 0);
 
         const tanHalf = Math.tan((angle / 2) * (Math.PI / 180));
-        const cutW    = tipDiam + 2 * depth * tanHalf;
+        const cutW = tipDiam + 2 * depth * tanHalf;
+        const DPR = window.devicePixelRatio || 1;
+        const cssW = el.clientWidth || CW;
+        const cssH = el.clientHeight || CH;
+        if (el.width !== Math.round(cssW * DPR) || el.height !== Math.round(cssH * DPR)) {
+            el.width = Math.round(cssW * DPR);
+            el.height = Math.round(cssH * DPR);
+        }
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.scale(DPR, DPR);
 
-        // Layout
-        const LABEL_TOP = 15, LABEL_BOT = 14, BIT_ABOVE = 20, MARGIN_X = 12;
-        const surfaceY = LABEL_TOP + BIT_ABOVE;
-        const availH   = CH - surfaceY - LABEL_BOT;
-        const availW   = CW - 2 * MARGIN_X;
-        const COPPER   = 3;
+        const W = cssW;
+        const H = cssH;
+        const marginX = 14;
+        const headerH = 24;
+        const footerH = 26;
+        const bitAbove = 22;
+        const copperThickness = 4;
+        const surfaceY = headerH + bitAbove;
+        const availH = H - surfaceY - footerH;
+        const availW = W - marginX * 2;
+        const sc = Math.min(availH / Math.max(depth, 0.001), (availW * 0.78) / Math.max(cutW, 0.0001));
+        const depthPx = depth * sc;
+        const cutHalfPx = (cutW * sc) / 2;
+        const tipHalfPx = (tipDiam * sc) / 2;
+        const cx = W / 2;
+        const tipY = surfaceY + depthPx;
+        const bitTopY = Math.max(8, surfaceY - bitAbove);
 
-        // Scale: fit depth vertically and cut width horizontally
-        const sc = Math.min(availH / depth, (availW * 0.88) / Math.max(cutW, 0.0001));
+        ctx.clearRect(0, 0, W, H);
 
-        const depthPx   = depth * sc;
-        const cwHalfPx  = (cutW / 2) * sc;
-        const tipHalfPx = (tipDiam / 2) * sc;
-        const cx        = CW / 2;
-        const tipY      = surfaceY + depthPx;
+        const bg = ctx.createLinearGradient(0, 0, 0, H);
+        bg.addColorStop(0, '#12171b');
+        bg.addColorStop(1, '#0a0d10');
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, W, H);
 
-        ctx.clearRect(0, 0, CW, CH);
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+        ctx.lineWidth = 1;
+        for (let y = 12; y < H; y += 18) {
+            ctx.beginPath();
+            ctx.moveTo(0, y + 0.5);
+            ctx.lineTo(W, y + 0.5);
+            ctx.stroke();
+        }
 
-        // Background
-        ctx.fillStyle = '#1a1a2e';
-        ctx.fillRect(0, 0, CW, CH);
+        const substrate = ctx.createLinearGradient(0, surfaceY, 0, H);
+        substrate.addColorStop(0, '#21303a');
+        substrate.addColorStop(1, '#162028');
+        ctx.fillStyle = substrate;
+        ctx.fillRect(marginX, surfaceY, availW, depthPx + 18);
 
-        // PCB substrate
-        ctx.fillStyle = '#1d2640';
-        ctx.fillRect(MARGIN_X, surfaceY, availW, depthPx + 6);
+        const copper = ctx.createLinearGradient(0, surfaceY - copperThickness, 0, surfaceY);
+        copper.addColorStop(0, '#efb157');
+        copper.addColorStop(1, '#9f5a15');
+        ctx.fillStyle = copper;
+        ctx.fillRect(marginX, surfaceY - copperThickness, availW, copperThickness);
 
-        // Copper layer
-        ctx.fillStyle = '#c07820';
-        ctx.fillRect(MARGIN_X, surfaceY - COPPER, availW, COPPER);
-
-        // V-cut (removed material)
+        ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(cx - cwHalfPx, surfaceY - COPPER);
+        ctx.moveTo(marginX, surfaceY + 0.5);
+        ctx.lineTo(W - marginX, surfaceY + 0.5);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(cx - cutHalfPx, surfaceY - copperThickness);
         ctx.lineTo(cx - tipHalfPx, tipY);
         ctx.lineTo(cx + tipHalfPx, tipY);
-        ctx.lineTo(cx + cwHalfPx,  surfaceY - COPPER);
+        ctx.lineTo(cx + cutHalfPx, surfaceY - copperThickness);
         ctx.closePath();
-        ctx.fillStyle = '#1a1a2e';
+        ctx.fillStyle = '#0b0f13';
         ctx.fill();
 
-        // Bit walls (silver — full V from tip through surface into air above)
-        ctx.strokeStyle = '#b0b0b0';
+        ctx.strokeStyle = '#cfd7df';
         ctx.lineWidth = 1.5;
-        ctx.setLineDash([]);
         ctx.beginPath();
-        ctx.moveTo(cx - cwHalfPx - BIT_ABOVE * tanHalf, surfaceY - COPPER - BIT_ABOVE);
+        ctx.moveTo(cx - cutHalfPx - bitAbove * tanHalf, bitTopY);
         ctx.lineTo(cx - tipHalfPx, tipY);
+        ctx.lineTo(cx + tipHalfPx, tipY);
+        ctx.lineTo(cx + cutHalfPx + bitAbove * tanHalf, bitTopY);
         ctx.stroke();
+
+        ctx.strokeStyle = '#ffb14a';
+        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(cx + cwHalfPx + BIT_ABOVE * tanHalf, surfaceY - COPPER - BIT_ABOVE);
+        ctx.moveTo(cx - cutHalfPx, surfaceY - copperThickness);
+        ctx.lineTo(cx - tipHalfPx, tipY);
+        ctx.moveTo(cx + cutHalfPx, surfaceY - copperThickness);
         ctx.lineTo(cx + tipHalfPx, tipY);
         ctx.stroke();
+
+        ctx.font = '10px IBM Plex Mono, monospace';
+        ctx.textBaseline = 'middle';
+
+        ctx.fillStyle = '#8e9c94';
+        ctx.textAlign = 'left';
+        ctx.fillText('surface', marginX, surfaceY - 10);
+        ctx.fillText('copper', marginX, surfaceY - copperThickness - 10);
+
+        const widthY = bitTopY + 8;
+        ctx.strokeStyle = '#7dffae';
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(cx - cutHalfPx, widthY);
+        ctx.lineTo(cx + cutHalfPx, widthY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(cx - cutHalfPx, widthY - 3);
+        ctx.lineTo(cx - cutHalfPx, widthY + 3);
+        ctx.moveTo(cx + cutHalfPx, widthY - 3);
+        ctx.lineTo(cx + cutHalfPx, widthY + 3);
+        ctx.stroke();
+        ctx.fillStyle = '#7dffae';
+        ctx.textAlign = 'center';
+        ctx.fillText(`cut ${cutW.toFixed(3)} mm`, cx, widthY - 10);
+
+        const depthX = Math.min(W - marginX - 10, cx + cutHalfPx + 18);
+        ctx.strokeStyle = '#74b4ff';
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(depthX, surfaceY);
+        ctx.lineTo(depthX, tipY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(depthX - 3, surfaceY);
+        ctx.lineTo(depthX + 3, surfaceY);
+        ctx.moveTo(depthX - 3, tipY);
+        ctx.lineTo(depthX + 3, tipY);
+        ctx.stroke();
+        ctx.fillStyle = '#74b4ff';
+        ctx.save();
+        ctx.translate(depthX + 10, surfaceY + depthPx / 2);
+        ctx.rotate(Math.PI / 2);
+        ctx.textAlign = 'center';
+        ctx.fillText(`depth ${depth.toFixed(3)} mm`, 0, 0);
+        ctx.restore();
+
         if (tipDiam > 0.005) {
+            ctx.strokeStyle = '#ff8c42';
             ctx.beginPath();
-            ctx.moveTo(cx - tipHalfPx, tipY);
-            ctx.lineTo(cx + tipHalfPx, tipY);
+            ctx.moveTo(cx - tipHalfPx, tipY + 8);
+            ctx.lineTo(cx + tipHalfPx, tipY + 8);
+            ctx.moveTo(cx - tipHalfPx, tipY + 5);
+            ctx.lineTo(cx - tipHalfPx, tipY + 11);
+            ctx.moveTo(cx + tipHalfPx, tipY + 5);
+            ctx.lineTo(cx + tipHalfPx, tipY + 11);
             ctx.stroke();
+            ctx.fillStyle = '#ff8c42';
+            ctx.textAlign = 'center';
+            ctx.fillText(`tip ${tipDiam.toFixed(3)} mm`, cx, Math.min(H - 8, tipY + 18));
         }
 
-        // Cut edge highlight (copper colour where V meets the PCB)
-        ctx.strokeStyle = '#e09030';
+        const arcRadius = Math.min(16, Math.max(10, cutHalfPx * 0.28));
+        ctx.strokeStyle = '#e3ff6a';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(cx - cwHalfPx, surfaceY - COPPER);
-        ctx.lineTo(cx - tipHalfPx, tipY);
-        ctx.moveTo(cx + cwHalfPx,  surfaceY - COPPER);
-        ctx.lineTo(cx + tipHalfPx, tipY);
+        ctx.arc(cx, tipY - 4, arcRadius, -Math.PI / 2 - (angle * Math.PI / 360), -Math.PI / 2 + (angle * Math.PI / 360));
         ctx.stroke();
-
-        // --- Annotations ---
-        ctx.setLineDash([]);
-        ctx.font = '10px system-ui, sans-serif';
-
-        // Cut width: dashed span + label above
-        const cwLineY = surfaceY - COPPER - 5;
-        ctx.strokeStyle = '#40c070';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([2, 2]);
-        ctx.beginPath();
-        ctx.moveTo(cx - cwHalfPx, cwLineY);
-        ctx.lineTo(cx + cwHalfPx, cwLineY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.moveTo(cx - cwHalfPx, cwLineY - 2); ctx.lineTo(cx - cwHalfPx, cwLineY + 2);
-        ctx.moveTo(cx + cwHalfPx, cwLineY - 2); ctx.lineTo(cx + cwHalfPx, cwLineY + 2);
-        ctx.stroke();
-        ctx.fillStyle = '#40c070';
+        ctx.fillStyle = '#e3ff6a';
         ctx.textAlign = 'center';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText(`${cutW.toFixed(3)} mm`, cx, cwLineY - 2);
-
-        // Depth: dashed vertical line to right of cut (if it fits), label at bottom
-        const dvX = cx + cwHalfPx + 8;
-        if (dvX < CW - 2) {
-            ctx.strokeStyle = '#5090e0';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([2, 2]);
-            ctx.beginPath();
-            ctx.moveTo(dvX, surfaceY);
-            ctx.lineTo(dvX, tipY);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.beginPath();
-            ctx.moveTo(dvX - 2, surfaceY); ctx.lineTo(dvX + 2, surfaceY);
-            ctx.moveTo(dvX - 2, tipY);     ctx.lineTo(dvX + 2, tipY);
-            ctx.stroke();
-        }
-        ctx.fillStyle = '#5090e0';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText(`depth: ${depth.toFixed(3)} mm`, cx, CH - 1);
+        ctx.fillText(`${angle.toFixed(0)}°`, cx, tipY - arcRadius - 8);
     }
 
     // Calculate cut width at a given depth for the current V-bit angle and tip diameter.
@@ -3032,6 +3726,9 @@ self.onmessage = function(e) {
         gcodeText = generateGcode();
         gcodeOutput.value = gcodeText;
         show(gcodeSection);
+        hide(bufferShell);
+        openBufferBtn.textContent = 'Show Buffer';
+        copyBtn.classList.remove('hidden');
 
         // Show the right download buttons for the selected mode
         const isCombined = modeCombined.checked;
@@ -3048,6 +3745,12 @@ self.onmessage = function(e) {
             copyBtn.textContent = 'Copied!';
             setTimeout(() => { copyBtn.textContent = orig; }, 1500);
         });
+    });
+
+    openBufferBtn.addEventListener('click', () => {
+        const opening = bufferShell.classList.contains('hidden');
+        bufferShell.classList.toggle('hidden', !opening);
+        openBufferBtn.textContent = opening ? 'Hide Buffer' : 'Show Buffer';
     });
 
     // Helper to trigger a file download
