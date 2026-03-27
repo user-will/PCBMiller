@@ -256,6 +256,8 @@
         .copper-filename { color: var(--copper); }
         .drill-filename { color: var(--drill); }
         .input-group { margin-bottom: 10px; }
+        .toggle-label { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.8rem; color: #ccc; }
+        .toggle-label input[type="checkbox"] { accent-color: var(--accent); }
         .input-group label {
             display: block;
             font-size: 0.66rem;
@@ -549,6 +551,7 @@
         #preview { width: 100%; height: 100%; display: block; cursor: grab; }
         #preview.panning { cursor: grabbing; }
         #preview.tab-mode { cursor: crosshair; }
+        #preview.vcut-select { cursor: crosshair; }
         .preview-hint {
             position: absolute;
             left: 14px;
@@ -732,9 +735,23 @@
             <div class="error" id="drillErrorMsg"></div>
         </div>
 
-        <!-- Isolation parameters (shown after copper file loads) -->
-        <div id="isolationSection" class="rail-card hidden">
+        <!-- V-Cut Layer (optional) -->
+        <div class="rail-card compact">
             <div class="section-step">Step 04</div>
+            <h2>V-Cut Layer <span class="section-subtle">(optional)</span></h2>
+            <div class="drop-zone" id="vcutDropZone">
+                <div class="drop-zone-text">Drop V-cut Gerber</div>
+                <div class="filename" id="vcutFilename"></div>
+            </div>
+            <input type="file" id="vcutFileInput" accept=".gbr,.ger,.gm1,.gm2,.gm3">
+            <div class="drop-zone-actions"><button class="btn-secondary hidden" id="clearVCutBtn">Clear V-Cuts</button></div>
+            <div class="hint">KiCad: User.1 or Eco1.User layer → File → Plot → Gerber</div>
+            <div class="error" id="vcutErrorMsg"></div>
+        </div>
+
+        <!-- Isolation parameters (shown after copper or V-cut file loads) -->
+        <div id="isolationSection" class="rail-card hidden">
+            <div class="section-step">Step 05</div>
             <h2>Isolation Routing</h2>
             <div class="input-group">
                 <label>V-Bit Angle</label>
@@ -796,9 +813,44 @@
             <hr class="section-divider">
         </div>
 
+        <!-- V-Cut Scoring Parameters (shown when V-cut file is loaded) -->
+        <div id="vcutSection" class="rail-card hidden">
+            <h2>V-Cut Scoring</h2>
+            <div class="hint" style="margin-bottom:8px">V-bit angle and tip diameter are set in Isolation Routing above</div>
+            <div class="input-group">
+                <label>V-Cut Depth</label>
+                <div class="input-row">
+                    <input type="number" id="vcutDepth" value="0.3" step="0.05" min="0.05">
+                    <span class="unit">mm</span>
+                </div>
+                <div class="hint">Partial depth — board scores but does not cut through</div>
+            </div>
+            <div class="input-group">
+                <label>V-Cut Feed Rate</label>
+                <div class="input-row">
+                    <input type="number" id="vcutFeedRate" value="150" step="10" min="1" max="1000">
+                    <span class="unit">mm/min</span>
+                </div>
+            </div>
+            <div class="info-row">
+                <span class="info-label">V-cut lines</span>
+                <span class="info-value" id="infoVCutLines">—</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Selected</span>
+                <span class="info-value" id="infoVCutSelected">—</span>
+            </div>
+            <button class="btn-tab-mode" id="vcutSelectBtn">+ Select Lines on Canvas</button>
+            <div style="display:flex;gap:6px;margin-top:6px">
+                <button class="btn-secondary" id="vcutSelectAllBtn" style="flex:1">Select All</button>
+                <button class="btn-secondary" id="vcutDeselectAllBtn" style="flex:1">Deselect All</button>
+            </div>
+            <hr class="section-divider">
+        </div>
+
         <!-- Machine Parameters (shown once any file is loaded) -->
         <div id="machineSection" class="rail-card hidden">
-            <div class="section-step">Step 05</div>
+            <div class="section-step">Step 06</div>
             <h2>Machine Parameters</h2>
             <div class="input-group">
                 <label>Safe Z Height</label>
@@ -892,10 +944,31 @@
                 </div>
                 <div class="hint">Machine max: 1000 mm/min</div>
             </div>
+            <div class="input-group" style="margin-top:8px">
+                <label class="toggle-label">
+                    <input type="checkbox" id="depanelMode"> Depanelize Panel
+                </label>
+                <div class="hint">Cut around all sub-board outlines instead of just the outer edge</div>
+            </div>
+            <div id="depanelOptions" class="hidden">
+                <div class="input-group">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="depanelCutOuter"> Also cut panel outline
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label>Auto-tabs per sub-board</label>
+                    <div class="input-row">
+                        <input type="number" id="depanelAutoTabs" value="2" step="1" min="0" max="8">
+                        <span class="unit">tabs</span>
+                    </div>
+                    <div class="hint">0 = no tabs; tabs spaced evenly around each sub-board</div>
+                </div>
+            </div>
             <hr class="section-divider">
         </div>
 
-        <!-- Tabs (shown after file loads) -->
+        <!-- Tabs (shown after file loads, hidden in depanelize mode) -->
         <div id="tabsSection" class="rail-card hidden">
             <h2>Tabs</h2>
             <div class="input-group">
@@ -936,7 +1009,7 @@
 
         <!-- Output mode (shown once any file is loaded) -->
         <div id="outputModeSection" class="rail-card hidden">
-            <div class="section-step">Step 06</div>
+            <div class="section-step">Step 07</div>
             <h2>Export Mode</h2>
             <div class="output-mode-row">
                 <label class="output-mode-opt">
@@ -967,6 +1040,8 @@
                     <button class="btn-secondary hidden" id="downloadTracesBtn">Traces.nc</button>
                     <button class="btn-secondary hidden" id="downloadDrillBtn">Drill.nc</button>
                     <button class="btn-secondary hidden" id="downloadOutlineBtn">Outline.nc</button>
+                    <button class="btn-secondary hidden" id="downloadVCutsBtn">VCuts.nc</button>
+                    <button class="btn-secondary hidden" id="downloadDepanelBtn">Depanel.nc</button>
                 </div>
             </div>
         </div>
@@ -1001,12 +1076,14 @@
                             <div class="legend-chip"><span class="legend-swatch" style="color:#74b4ff;background:#74b4ff"></span>Edge Cut</div>
                             <div class="legend-chip"><span class="legend-swatch" style="color:#d9a6ff;background:#d9a6ff"></span>Drill</div>
                             <div class="legend-chip"><span class="legend-swatch" style="color:#e3ff6a;background:#e3ff6a"></span>Tabs</div>
+                            <div class="legend-chip"><span class="legend-swatch" style="color:#00d4d4;background:#00d4d4"></span>V-Cuts</div>
                         </div>
                     </div>
                     <div class="preview">
                         <canvas id="preview"></canvas>
                         <div class="preview-hint" id="previewHint">Scroll to zoom · Drag to pan</div>
                         <div class="tab-hint" id="tabHint">Click on the red toolpath to place a tab · click the button again to exit</div>
+                        <div class="tab-hint" id="vcutSelectHint" style="background:rgba(0,212,212,0.1);border-color:rgba(0,212,212,0.3);color:#00d4d4">Click a line to select/deselect it · click the button again to exit</div>
                     </div>
                 </div>
             </section>
@@ -1039,6 +1116,14 @@
     let gcodeTraces    = '';   // separate-mode: isolation routing GCode
     let gcodeDrill     = '';   // separate-mode: drilling GCode
     let gcodeOutline   = '';   // separate-mode: edge cuts GCode
+    let vcutSegments   = [];   // [{x1,y1,x2,y2}] raw D01 strokes from V-cut Gerber
+    let vcutSelectedSet = new Set(); // indices of selected V-cut segments (default: all)
+    let vcutSelectMode = false;
+    let depanelToolpaths = []; // cached offset contours per sub-board (for depanelization)
+    let depanelMode    = false;
+    let depanelCutOuter = false;
+    let gcodeVCuts     = '';   // separate-mode: V-cut scoring GCode
+    let gcodeDepanel   = '';   // separate-mode: depanelization GCode
 
     // Canvas pan/zoom
     let viewScale = 10;
@@ -1098,7 +1183,17 @@
     const downloadTracesBtn = document.getElementById('downloadTracesBtn');
     const downloadDrillBtn  = document.getElementById('downloadDrillBtn');
     const downloadOutlineBtn= document.getElementById('downloadOutlineBtn');
+    const downloadVCutsBtn  = document.getElementById('downloadVCutsBtn');
+    const downloadDepanelBtn= document.getElementById('downloadDepanelBtn');
     const openBufferBtn     = document.getElementById('openBufferBtn');
+    const vcutDropZone    = document.getElementById('vcutDropZone');
+    const vcutFileInput   = document.getElementById('vcutFileInput');
+    const vcutFilenameEl  = document.getElementById('vcutFilename');
+    const vcutErrorMsg    = document.getElementById('vcutErrorMsg');
+    const clearVCutBtn    = document.getElementById('clearVCutBtn');
+    const vcutSection     = document.getElementById('vcutSection');
+    const vcutSelectBtn   = document.getElementById('vcutSelectBtn');
+    const vcutSelectHint  = document.getElementById('vcutSelectHint');
     const tabModeBtn     = document.getElementById('tabModeBtn');
     const tabList        = document.getElementById('tabList');
     const tabHint        = document.getElementById('tabHint');
@@ -1108,6 +1203,7 @@
     function hasEdgeCutsLoaded() { return !!toolpath; }
     function hasCopperLoaded() { return copperSegments.length || copperFlashes.length || copperRegions.length; }
     function hasDrillLoaded() { return drillHoles.length > 0; }
+    function hasVCutsLoaded() { return vcutSegments.length > 0; }
 
     function formatMinutes(totalMinutes) {
         if (!isFinite(totalMinutes) || totalMinutes <= 0) return '—';
@@ -1146,15 +1242,20 @@
         const hasEdge = hasEdgeCutsLoaded();
         const hasCopper = hasCopperLoaded();
         const hasDrill = hasDrillLoaded();
-        const hasAny = hasEdge || hasCopper || hasDrill;
+        const hasVCuts = hasVCutsLoaded();
+        const hasAny = hasEdge || hasCopper || hasDrill || hasVCuts;
 
         clearEdgeBtn.classList.toggle('hidden', !hasEdge);
         clearCopperBtn.classList.toggle('hidden', !hasCopper);
         clearDrillBtn.classList.toggle('hidden', !hasDrill);
+        clearVCutBtn.classList.toggle('hidden', !hasVCuts);
 
         hasEdge ? show(paramsSection) : hide(paramsSection);
-        hasEdge ? show(tabsSection) : hide(tabsSection);
-        hasCopper ? show(isolationSection) : hide(isolationSection);
+        // Hide manual tabs when depanelize mode is active (auto-tabs used instead)
+        (hasEdge && !depanelMode) ? show(tabsSection) : hide(tabsSection);
+        // Show isolation section when copper OR V-cuts are loaded (V-cuts need the V-bit settings)
+        (hasCopper || hasVCuts) ? show(isolationSection) : hide(isolationSection);
+        hasVCuts ? show(vcutSection) : hide(vcutSection);
         hasDrill ? show(drillSection) : hide(drillSection);
         hasAny ? show(machineSection) : hide(machineSection);
         hasAny ? show(outputModeSection) : hide(outputModeSection);
@@ -1255,6 +1356,40 @@
             }
         }
 
+        if (vcutSelectedSet.size > 0) {
+            const feed  = Math.max(1, parseFloat(document.getElementById('vcutFeedRate').value) || 150);
+            const depth = parseFloat(document.getElementById('vcutDepth').value) || 0.3;
+            const activeSegs = vcutSegments.filter((_, i) => vcutSelectedSet.has(i));
+            const sorted = sortSegmentsNearestNeighbor(activeSegs, 0, 0);
+            let cx = 0, cy = 0;
+            for (const seg of sorted) {
+                const p1 = toGC({ x: seg.x1, y: seg.y1 });
+                const p2 = toGC({ x: seg.x2, y: seg.y2 });
+                minutes += Math.hypot(p1.x - cx, p1.y - cy) / feed;
+                minutes += ((safeZ + depth) * 2) / plungeRate;
+                minutes += Math.hypot(p2.x - p1.x, p2.y - p1.y) / feed;
+                cx = p2.x; cy = p2.y;
+            }
+        }
+
+        if (depanelMode && depanelToolpaths.length) {
+            const feed = Math.max(1, parseFloat(document.getElementById('feedRate').value) || 200);
+            const cutDepth  = parseFloat(document.getElementById('cutDepth').value) || 1.6;
+            const passDepth = parseFloat(document.getElementById('passDepth').value) || 1.8;
+            const passes = buildPasses(cutDepth, passDepth);
+            for (const tp of depanelToolpaths) {
+                if (tp.length < 2) continue;
+                const lens = computeArcLengths(tp);
+                const total = lens[lens.length - 1];
+                const start = toGC(tp[0]);
+                for (const passZ of passes) {
+                    minutes += Math.hypot(start.x, start.y) / feed;
+                    minutes += total / feed;
+                    minutes += ((safeZ + Math.abs(passZ)) * 2) / plungeRate;
+                }
+            }
+        }
+
         const runtime = formatMinutes(minutes);
         infoRunTime.textContent = runtime;
         headerRunTime.textContent = runtime;
@@ -1266,6 +1401,7 @@
         boardBounds = null;
         toolpath = null;
         toolpathLens = null;
+        depanelToolpaths = [];
         tabs = [];
         tabModeActive = false;
         filenameEl.textContent = '';
@@ -1306,13 +1442,61 @@
         drawPreview();
     }
 
+    function loadVCutFile(file) {
+        vcutErrorMsg.textContent = '';
+        const reader = new FileReader();
+        reader.onload = e => {
+            try {
+                const segs = parseVCuts(e.target.result);
+                if (!segs.length) {
+                    vcutErrorMsg.textContent = 'No line segments found. Is this a Gerber V-cut layer?';
+                    return;
+                }
+                vcutSegments = segs;
+                vcutSelectedSet = new Set(segs.map((_, i) => i)); // all selected by default
+                vcutFilenameEl.textContent = file.name;
+                vcutDropZone.classList.add('loaded');
+                document.getElementById('infoVCutLines').textContent = segs.length;
+                document.getElementById('infoVCutSelected').textContent = `${segs.length} / ${segs.length}`;
+                refreshUiState();
+                drawPreview();
+            } catch (err) {
+                vcutErrorMsg.textContent = 'Error parsing V-cut file: ' + err.message;
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    function clearVCutFile() {
+        vcutSegments = [];
+        vcutSelectedSet = new Set();
+        vcutSelectMode = false;
+        vcutSelectBtn.classList.remove('active');
+        canvas.classList.remove('vcut-select');
+        vcutSelectHint.style.display = 'none';
+        vcutFilenameEl.textContent = '';
+        vcutFileInput.value = '';
+        vcutErrorMsg.textContent = '';
+        vcutDropZone.classList.remove('loaded');
+        document.getElementById('infoVCutLines').textContent = '—';
+        document.getElementById('infoVCutSelected').textContent = '—';
+        refreshUiState();
+        drawPreview();
+    }
+
+    function updateVCutSelectedDisplay() {
+        document.getElementById('infoVCutSelected').textContent =
+            `${vcutSelectedSet.size} / ${vcutSegments.length}`;
+    }
+
     // =========================================================
     // === GERBER PARSER (adapted from svg2stencil by Will)
     // =========================================================
 
-    // Parse edge cuts from a Gerber file (stroke-based, not region-based).
-    // Returns an array of closed contours [{x,y}[]]. Y is inverted (Y-down canvas coords).
-    function parseEdgeCuts(content) {
+    // Parse all D01 strokes from a Gerber file into raw line segments.
+    // Returns [{x1,y1,x2,y2}]. Y is inverted (Y-down canvas coords).
+    // Shared by parseEdgeCuts() and parseVCuts().
+    function parseGerberSegments(content) {
         let xDec = 6, yDec = 6;
         const fmtMatch = content.match(/%FSL[AI]X\d(\d)Y\d(\d)\*%/);
         if (fmtMatch) { xDec = parseInt(fmtMatch[1]); yDec = parseInt(fmtMatch[2]); }
@@ -1378,7 +1562,19 @@
             }
         }
 
-        return chainSegmentsToContours(segments);
+        return segments;
+    }
+
+    // Parse edge cuts from a Gerber file (stroke-based, not region-based).
+    // Returns an array of closed contours [{x,y}[]]. Y is inverted (Y-down canvas coords).
+    function parseEdgeCuts(content) {
+        return chainSegmentsToContours(parseGerberSegments(content));
+    }
+
+    // Parse V-cut score lines from a Gerber file.
+    // Returns raw segments [{x1,y1,x2,y2}] — no contour chaining needed.
+    function parseVCuts(content) {
+        return parseGerberSegments(content);
     }
 
     // Connect a flat list of line segments into closed contours.
@@ -1771,6 +1967,79 @@
             sum += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
         }
         return sum / 2;
+    }
+
+    // Build offset toolpaths for each sub-board in a panel.
+    // Sorts parsedContours by area (largest = panel outline), returns offset contour for each inner board.
+    // Cached in depanelToolpaths; rebuild when contours or tool diameter changes.
+    function buildDepanelToolpaths() {
+        if (parsedContours.length < 2) return [];
+        const sorted = [...parsedContours].sort((a, b) => Math.abs(signedArea(b)) - Math.abs(signedArea(a)));
+        const toolR = parseFloat(document.getElementById('toolDiam').value) / 2;
+        return sorted.slice(1).map(c => offsetPolygon(c, toolR));
+    }
+
+    // Nearest-neighbor sort for open line segments (bi-directional: each segment can be entered from either end).
+    // Returns segments in visit order, reversed if entering from the far end is closer.
+    function sortSegmentsNearestNeighbor(segs, startX, startY) {
+        if (!segs.length) return [];
+        const remaining = segs.slice();
+        const result = [];
+        let cx = startX, cy = startY;
+        while (remaining.length) {
+            let bestIdx = 0, bestDist = Infinity, bestFlip = false;
+            for (let i = 0; i < remaining.length; i++) {
+                const s = remaining[i];
+                const d1 = (s.x1 - cx) ** 2 + (s.y1 - cy) ** 2;
+                const d2 = (s.x2 - cx) ** 2 + (s.y2 - cy) ** 2;
+                const d = Math.min(d1, d2);
+                if (d < bestDist) { bestDist = d; bestIdx = i; bestFlip = d2 < d1; }
+            }
+            const seg = remaining.splice(bestIdx, 1)[0];
+            const out = bestFlip ? { x1: seg.x2, y1: seg.y2, x2: seg.x1, y2: seg.y1 } : seg;
+            result.push(out);
+            cx = out.x2; cy = out.y2;
+        }
+        return result;
+    }
+
+    // Returns the squared distance from point (px, py) to the closest point on segment (x1,y1)→(x2,y2).
+    function pointToSegmentDistSq(px, py, x1, y1, x2, y2) {
+        const dx = x2 - x1, dy = y2 - y1;
+        const lenSq = dx * dx + dy * dy;
+        if (lenSq < 0.00001) return (px - x1) ** 2 + (py - y1) ** 2;
+        const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+        return (px - (x1 + t * dx)) ** 2 + (py - (y1 + t * dy)) ** 2;
+    }
+
+    // Returns the index of the V-cut segment closest to world point (wx, wy) within threshold,
+    // or -1 if none within range. threshold is in world-coord units (mm).
+    function nearestVCutSegment(wx, wy, threshold) {
+        let bestIdx = -1, bestDistSq = threshold * threshold;
+        for (let i = 0; i < vcutSegments.length; i++) {
+            const s = vcutSegments[i];
+            const dSq = pointToSegmentDistSq(wx, wy, s.x1, s.y1, s.x2, s.y2);
+            if (dSq < bestDistSq) { bestDistSq = dSq; bestIdx = i; }
+        }
+        return bestIdx;
+    }
+
+    // Pure version of pointAtLength that works on any path + arc-lengths array (no globals).
+    function pointAtLengthOnPath(len, path, lens) {
+        const total = lens[lens.length - 1];
+        if (total <= 0) return { ...path[0] };
+        len = ((len % total) + total) % total;
+        const n = path.length;
+        for (let i = 0; i < n; i++) {
+            const a = lens[i], b = lens[i + 1];
+            if (len >= a && len <= b) {
+                const t = (b - a) < 0.0001 ? 0 : (len - a) / (b - a);
+                const p0 = path[i];
+                const p1 = path[(i + 1) % n];
+                return { x: p0.x + t * (p1.x - p0.x), y: p0.y + t * (p1.y - p0.y) };
+            }
+        }
+        return { ...path[0] };
     }
 
     function offsetPolygonRaw(points, delta) {
@@ -2353,7 +2622,7 @@ self.onmessage = function(e) {
     function drawPreview() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        const hasAnything = parsedContours.length || copperSegments.length || copperFlashes.length || copperRegions.length || drillHoles.length;
+        const hasAnything = parsedContours.length || copperSegments.length || copperFlashes.length || copperRegions.length || drillHoles.length || vcutSegments.length;
         if (!hasAnything) {
             ctx.fillStyle = '#333';
             ctx.font = '14px system-ui';
@@ -2467,8 +2736,30 @@ self.onmessage = function(e) {
             ctx.lineCap = 'butt';
         }
 
-        // Edge cut toolpath
-        if (toolpath) {
+        // V-cut score lines — selected in teal, deselected dimmed
+        if (vcutSegments.length) {
+            ctx.lineWidth = 1.5 / viewScale;
+            ctx.lineCap   = 'round';
+            for (let i = 0; i < vcutSegments.length; i++) {
+                const seg = vcutSegments[i];
+                ctx.strokeStyle = vcutSelectedSet.has(i) ? '#00d4d4' : 'rgba(0,180,180,0.2)';
+                ctx.beginPath();
+                ctx.moveTo(seg.x1, seg.y1);
+                ctx.lineTo(seg.x2, seg.y2);
+                ctx.stroke();
+            }
+            ctx.lineCap = 'butt';
+        }
+
+        // Edge cut toolpath (or depanel toolpaths when in depanelize mode)
+        if (depanelMode && depanelToolpaths.length) {
+            for (const tp of depanelToolpaths) {
+                drawPolyline(tp, '#74b4ff', 2.6);
+            }
+            if (depanelCutOuter && toolpath) {
+                drawPolyline(toolpath, 'rgba(116,180,255,0.5)', 2.0);
+            }
+        } else if (toolpath) {
             drawPolyline(toolpath, '#74b4ff', 2.6);
         }
 
@@ -2946,6 +3237,115 @@ self.onmessage = function(e) {
         return rotateClosedPath(toolpath, bestIdx).map(toGC);
     }
 
+    // Emit G-code for V-cut score lines. depth is negative (e.g. -0.3).
+    function emitVCutLines(lines, segs, depth, safeZ, feedRate, plungeRate, f) {
+        if (!segs.length) return;
+        lines.push('');
+        lines.push('; === V-CUT SCORING ===');
+        const sorted = sortSegmentsNearestNeighbor(segs, 0, 0);
+        for (const seg of sorted) {
+            const p1 = toGC({ x: seg.x1, y: seg.y1 });
+            const p2 = toGC({ x: seg.x2, y: seg.y2 });
+            lines.push(`G0 X${f(p1.x)} Y${f(p1.y)}`);
+            lines.push(`G1 Z${f(depth)} F${plungeRate}  ; plunge`);
+            lines.push(`G1 X${f(p2.x)} Y${f(p2.y)} F${feedRate}`);
+            lines.push(`G0 Z${f(safeZ)}  ; retract`);
+        }
+        const optimized = optimizeG1Moves(lines);
+        lines.length = 0;
+        lines.push(...optimized);
+    }
+
+    // Emit G-code for depanelization — cut around each sub-board contour in the panel.
+    // toolpaths: array of offset contours (internal Y-down coords).
+    // autoTabCount: number of evenly-spaced tabs per sub-board (0 = no tabs).
+    // tabWidth: width of each tab in mm.
+    function emitDepanelLines(lines, toolpaths, passes, safeZ, feedRate, plungeRate, tabLayers, autoTabCount, tabWidth, f) {
+        if (!toolpaths.length) return;
+        lines.push('');
+        lines.push('; === DEPANELIZATION ===');
+
+        for (let bi = 0; bi < toolpaths.length; bi++) {
+            const tp = toolpaths[bi];
+            if (!tp || tp.length < 2) continue;
+            const lens = computeArcLengths(tp);
+            const total = lens[lens.length - 1];
+            if (total < 0.01) continue;
+
+            // Build auto-tab intervals in absolute arc-length space
+            const autoIntervals = [];
+            if (autoTabCount > 0 && tabWidth > 0) {
+                for (let ti = 0; ti < autoTabCount; ti++) {
+                    const center = total * ti / autoTabCount;
+                    autoIntervals.push({ start: center - tabWidth / 2, end: center + tabWidth / 2 });
+                }
+            }
+
+            lines.push('');
+            lines.push(`; --- Sub-board ${bi + 1}/${toolpaths.length} ---`);
+
+            for (let pi = 0; pi < passes.length; pi++) {
+                const passZ = passes[pi];
+                const useTabs = autoIntervals.length > 0 && pi >= passes.length - tabLayers;
+
+                lines.push('');
+                lines.push(`; Pass ${pi + 1}/${passes.length}: Z${f(passZ)}${useTabs ? ' (tabs)' : ''}`);
+
+                const startPt = toGC(tp[0]);
+                lines.push(`G0 X${f(startPt.x)} Y${f(startPt.y)}`);
+                lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
+
+                if (!useTabs) {
+                    for (let i = 1; i < tp.length; i++) {
+                        const pt = toGC(tp[i]);
+                        lines.push(`G1 X${f(pt.x)} Y${f(pt.y)} F${feedRate}`);
+                    }
+                    lines.push(`G1 X${f(startPt.x)} Y${f(startPt.y)} F${feedRate}  ; close`);
+                } else {
+                    // Walk in small steps checking tab intervals
+                    const STEP = 0.3;
+                    let walked = 0;
+                    let cutting = true;
+                    while (walked < total) {
+                        const step = Math.min(STEP, total - walked);
+                        walked += step;
+                        const len = walked % total;
+                        const pt  = toGC(pointAtLengthOnPath(len, tp, lens));
+
+                        const absLen = walked % total;
+                        const inTab = autoIntervals.some(iv => {
+                            // Handle wrapping around the closed contour
+                            const s = ((iv.start % total) + total) % total;
+                            const e = ((iv.end   % total) + total) % total;
+                            return s < e ? absLen >= s && absLen <= e
+                                         : absLen >= s || absLen <= e;
+                        });
+
+                        if (inTab && cutting) {
+                            lines.push(`G0 Z${f(safeZ)}  ; lift over tab`);
+                            lines.push(`G0 X${f(pt.x)} Y${f(pt.y)}`);
+                            cutting = false;
+                        } else if (!inTab && !cutting) {
+                            lines.push(`G0 X${f(pt.x)} Y${f(pt.y)}`);
+                            lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge after tab`);
+                            cutting = true;
+                        } else if (cutting) {
+                            lines.push(`G1 X${f(pt.x)} Y${f(pt.y)} F${feedRate}`);
+                        } else {
+                            lines.push(`G0 X${f(pt.x)} Y${f(pt.y)}`);
+                        }
+                    }
+                }
+
+                lines.push(`G0 Z${f(safeZ)}  ; retract`);
+            }
+        }
+
+        const optimized = optimizeG1Moves(lines);
+        lines.length = 0;
+        lines.push(...optimized);
+    }
+
     // Emit G-code lines for one full pass around the contour at depth passZ.
     // useTabs = true only on passes where we actually want gaps (typically the final pass).
     function emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f) {
@@ -3007,10 +3407,13 @@ self.onmessage = function(e) {
     }
 
     function generateGcode() {
-        if (!toolpath && !copperToolpaths.length && !drillHoles.length) return '';
+        const activeVCuts = vcutSegments.filter((_, i) => vcutSelectedSet.has(i));
+        const hasVCuts   = activeVCuts.length > 0;
+        const hasDepanel = depanelMode && parsedContours.length >= 2;
+        if (!toolpath && !copperToolpaths.length && !drillHoles.length && !hasVCuts) return '';
 
         // Compute canonical bounds once for all operations.
-        // For drill-only files, synthesize bounds from hole positions.
+        // For drill-only or V-cut-only files, synthesize bounds from geometry.
         if (boardBounds || copperBounds) {
             gcBounds = boardBounds || copperBounds;
         } else if (drillHoles.length) {
@@ -3018,6 +3421,13 @@ self.onmessage = function(e) {
             for (const h of drillHoles) {
                 minX = Math.min(minX, h.x - h.r); maxX = Math.max(maxX, h.x + h.r);
                 minY = Math.min(minY, h.y - h.r); maxY = Math.max(maxY, h.y + h.r);
+            }
+            gcBounds = { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+        } else if (hasVCuts) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const s of activeVCuts) {
+                minX = Math.min(minX, s.x1, s.x2); maxX = Math.max(maxX, s.x1, s.x2);
+                minY = Math.min(minY, s.y1, s.y2); maxY = Math.max(maxY, s.y1, s.y2);
             }
             gcBounds = { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
         }
@@ -3031,12 +3441,11 @@ self.onmessage = function(e) {
 
         const hasIsolation = copperToolpaths.length > 0;
         const hasDrill     = drillHoles.length > 0;
-        const hasEdgeCuts  = !!toolpath;
         const combined     = modeCombined.checked;
 
-        // --- Read operation params ---
-        let isoDepth = 0, isoFeedRate = 150, vbitAngle = '', isoToolDiam = '', isoDepthUi = 0;
-        if (hasIsolation || hasDrill) {
+        // --- Read V-bit params (always, since V-cuts also use the V-bit) ---
+        let isoDepth = 0, isoFeedRate = 150, vbitAngle = '?', isoToolDiam = '?', isoDepthUi = 0;
+        if (document.getElementById('vbitAngle')) {
             isoDepthUi  = parseFloat(document.getElementById('isoDepth').value);
             isoDepth    = -isoDepthUi;
             isoFeedRate = parseInt(document.getElementById('isoFeedRate').value);
@@ -3051,23 +3460,50 @@ self.onmessage = function(e) {
             drillFeedRate = parseInt(document.getElementById('drillFeedRate').value);
         }
 
-        let cutDepth = 0, cutDepthUi = 0, passDepth = 0.5, feedRate = 300, tabLayers = 1, toolDiam = '?', passes = [];
-        if (hasEdgeCuts) {
+        // Edge cut params (used for both normal edge cuts and depanelization)
+        let cutDepthUi = 0, passDepth = 0.5, feedRate = 300, tabLayers = 1, toolDiam = '?', passes = [];
+        const hasEdgeCutsFile = !!toolpath || hasDepanel;
+        if (hasEdgeCutsFile) {
             cutDepthUi = parseFloat(document.getElementById('cutDepth').value);
-            cutDepth  = -cutDepthUi;
-            passDepth = parseFloat(document.getElementById('passDepth').value);
-            feedRate  = parseInt(document.getElementById('feedRate').value);
-            tabLayers = Math.max(1, parseInt(document.getElementById('tabLayers').value) || 1);
-            toolDiam  = document.getElementById('toolDiam').value;
-            passes    = buildPasses(cutDepthUi, passDepth);
+            passDepth  = parseFloat(document.getElementById('passDepth').value);
+            feedRate   = parseInt(document.getElementById('feedRate').value);
+            tabLayers  = Math.max(1, parseInt(document.getElementById('tabLayers').value) || 1);
+            toolDiam   = document.getElementById('toolDiam').value;
+            passes     = buildPasses(cutDepthUi, passDepth);
+        }
+
+        // Normal edge cuts: run only if not in depanelMode, or if depanelCutOuter is checked
+        const hasEdgeCuts = !!toolpath && (!depanelMode || depanelCutOuter);
+
+        // V-cut params
+        let vcutDepthVal = -0.3, vcutFeedRate = 150;
+        if (hasVCuts) {
+            vcutDepthVal = -parseFloat(document.getElementById('vcutDepth').value);
+            vcutFeedRate = parseInt(document.getElementById('vcutFeedRate').value);
+        }
+
+        // Depanelize params
+        let depanelAutoTabCount = 0, depanelTabWidth = 3;
+        if (hasDepanel) {
+            depanelAutoTabCount = parseInt(document.getElementById('depanelAutoTabs').value) || 0;
+            depanelTabWidth     = parseFloat(document.getElementById('tabWidth').value) || 3;
         }
 
         // --- Build content for each operation ---
         const isolationLines = [];
         if (hasIsolation) emitIsolationLines(isolationLines, copperToolpaths, isoDepth, safeZ, isoFeedRate, plungeRate, f);
 
+        const vcutLines = [];
+        if (hasVCuts) emitVCutLines(vcutLines, activeVCuts, vcutDepthVal, safeZ, vcutFeedRate, plungeRate, f);
+
         const drillLines = [];
         if (hasDrill) emitDrillLines(drillLines, drillHoles, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f);
+
+        const depanelLines = [];
+        if (hasDepanel) {
+            const dtp = depanelToolpaths.length ? depanelToolpaths : buildDepanelToolpaths();
+            emitDepanelLines(depanelLines, dtp, passes, safeZ, feedRate, plungeRate, tabLayers, depanelAutoTabCount, depanelTabWidth, f);
+        }
 
         const edgeLines = [];
         if (hasEdgeCuts) {
@@ -3082,6 +3518,8 @@ self.onmessage = function(e) {
         }
 
         // --- Helpers for assembly ---
+        const drillBitSizes = hasDrill ? [...new Set(drillHoles.map(h => h.diam > 0 ? h.diam.toFixed(3) : '?'))].sort((a, b) => parseFloat(a) - parseFloat(b)) : [];
+
         function makeHeader(title) {
             const h = [
                 `; PCBMiller - ${title} - generated ${new Date().toISOString()}`,
@@ -3090,7 +3528,9 @@ self.onmessage = function(e) {
                 `; Origin: place the board bottom-left corner at machine X0 Y0`,
             ];
             if (hasIsolation) h.push(`; Isolation routing: ${copperToolpaths.length} paths, depth ${isoDepthUi} mm at ${isoFeedRate} mm/min`);
+            if (hasVCuts)     h.push(`; V-cut scoring: ${activeVCuts.length} lines, depth ${Math.abs(vcutDepthVal)} mm at ${vcutFeedRate} mm/min`);
             if (hasDrill)     h.push(`; Drilling: ${drillHoles.length} holes, depth ${drillDepthUi} mm, bits: ${drillBitSizes.join(', ')} mm`);
+            if (hasDepanel)   h.push(`; Depanelization: ${depanelToolpaths.length || '?'} sub-boards, depth ${cutDepthUi} mm, feed ${feedRate} mm/min`);
             if (hasEdgeCuts)  h.push(`; Edge cuts: depth ${cutDepthUi} mm, ${passes.length} pass(es), feed ${feedRate} mm/min`);
             return h;
         }
@@ -3135,10 +3575,10 @@ self.onmessage = function(e) {
             return tc;
         }
 
-        const isoTool   = `V-bit (${vbitAngle}° angle, ${isoToolDiam} mm tip) — isolation routing`;
-        const drillBitSizes = hasDrill ? [...new Set(drillHoles.map(h => h.diam > 0 ? h.diam.toFixed(3) : '?'))].sort((a, b) => parseFloat(a) - parseFloat(b)) : [];
+        // V-cuts and isolation routing share the same V-bit — no tool change between them.
+        const isoTool   = `V-bit (${vbitAngle}° angle, ${isoToolDiam} mm tip) — isolation routing / V-cut scoring`;
         const drillTool = `Drill bits (${drillBitSizes.join(', ')} mm) — drilling`;
-        const edgeTool  = `End mill (${toolDiam} mm) — board outline`;
+        const edgeTool  = `End mill (${toolDiam} mm) — board outline / depanelization`;
 
         let result;
 
@@ -3146,14 +3586,28 @@ self.onmessage = function(e) {
             // Single file with M0 pauses between operations
             const lines = [...makeHeader('Combined'), '', ...makeStartup()];
 
+            // Sections: isolation + V-cuts share V-bit (grouped), then drill, then depanel/edge cuts
             const sections = [];
-            if (hasIsolation) sections.push({ content: isolationLines, tool: isoTool });
-            if (hasDrill)     sections.push({ content: drillLines,     tool: drillTool });
-            if (hasEdgeCuts)  sections.push({ content: edgeLines,      tool: edgeTool });
+            if (hasIsolation || hasVCuts) {
+                const vBitContent = [...isolationLines, ...vcutLines];
+                sections.push({ content: vBitContent, tool: isoTool });
+            }
+            if (hasDrill)   sections.push({ content: drillLines,   tool: drillTool });
+            if (hasDepanel) sections.push({ content: depanelLines, tool: edgeTool });
+            if (hasEdgeCuts) sections.push({ content: edgeLines,   tool: edgeTool });
+            // Merge consecutive same-tool sections (depanel + edge cuts share end mill)
+            const merged = [];
+            for (const s of sections) {
+                if (merged.length && merged[merged.length - 1].tool === s.tool) {
+                    merged[merged.length - 1].content = [...merged[merged.length - 1].content, ...s.content];
+                } else {
+                    merged.push({ ...s, content: [...s.content] });
+                }
+            }
 
-            for (let i = 0; i < sections.length; i++) {
-                if (i > 0) lines.push(...makeToolChange(sections[i - 1].tool, sections[i].tool));
-                lines.push(...sections[i].content);
+            for (let i = 0; i < merged.length; i++) {
+                if (i > 0) lines.push(...makeToolChange(merged[i - 1].tool, merged[i].tool));
+                lines.push(...merged[i].content);
             }
 
             lines.push('');
@@ -3161,10 +3615,10 @@ self.onmessage = function(e) {
             lines.push(`G0 Z${f(safeZ)}`);
             lines.push('M30  ; end of program');
 
-            gcodeTraces = gcodeOutline = gcodeDrill = '';
+            gcodeTraces = gcodeOutline = gcodeDrill = gcodeVCuts = gcodeDepanel = '';
             result = optimizeMotionOutput(lines).join('\n');
         } else {
-            // Three separate files — each is a standalone, valid GCode file
+            // Separate files — each is a standalone, valid GCode file
             function buildSectionFile(title, sectionLines) {
                 if (!sectionLines.length) return '';
                 return optimizeMotionOutput([
@@ -3175,14 +3629,20 @@ self.onmessage = function(e) {
             }
 
             gcodeTraces  = hasIsolation ? buildSectionFile('Isolation Routing', isolationLines) : '';
-            gcodeDrill   = hasDrill     ? buildSectionFile('Drilling',           drillLines)    : '';
-            gcodeOutline = hasEdgeCuts  ? buildSectionFile('Board Outline',      edgeLines)     : '';
+            gcodeVCuts   = hasVCuts     ? buildSectionFile('V-Cut Scoring',     vcutLines)      : '';
+            gcodeDrill   = hasDrill     ? buildSectionFile('Drilling',           drillLines)     : '';
+            gcodeDepanel = hasDepanel   ? buildSectionFile('Depanelization',     depanelLines)   : '';
+            gcodeOutline = hasEdgeCuts  ? buildSectionFile('Board Outline',      edgeLines)      : '';
 
             // Textarea shows a combined preview so the user can review all content
             const preview = [];
-            if (gcodeTraces)  { preview.push('; ====== FILE 1 OF 3: TRACES (Isolation Routing) ======\n'); preview.push(gcodeTraces); }
-            if (gcodeDrill)   { preview.push('\n; ====== FILE 2 OF 3: DRILL ======\n'); preview.push(gcodeDrill); }
-            if (gcodeOutline) { preview.push('\n; ====== FILE 3 OF 3: OUTLINE (Board Outline) ======\n'); preview.push(gcodeOutline); }
+            let fileNum = 0;
+            const totalFiles = [gcodeTraces, gcodeVCuts, gcodeDrill, gcodeDepanel, gcodeOutline].filter(Boolean).length;
+            if (gcodeTraces)  { preview.push(`; ====== FILE ${++fileNum} OF ${totalFiles}: TRACES (Isolation Routing) ======\n`); preview.push(gcodeTraces); }
+            if (gcodeVCuts)   { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: V-CUTS ======\n`); preview.push(gcodeVCuts); }
+            if (gcodeDrill)   { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: DRILL ======\n`); preview.push(gcodeDrill); }
+            if (gcodeDepanel) { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: DEPANELIZATION ======\n`); preview.push(gcodeDepanel); }
+            if (gcodeOutline) { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: OUTLINE (Board Outline) ======\n`); preview.push(gcodeOutline); }
             result = preview.join('\n');
         }
 
@@ -3214,6 +3674,7 @@ self.onmessage = function(e) {
                 const toolDiam = parseFloat(document.getElementById('toolDiam').value);
                 toolpath     = offsetPolygon(outerContour, toolDiam / 2);
                 toolpathLens = computeArcLengths(toolpath);
+                if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
                 if (hasCopperLoaded()) rebuildIsolation();
 
                 // Reveal sidebar sections
@@ -3684,7 +4145,7 @@ self.onmessage = function(e) {
             scheduleRedraw();
         }, { passive: false });
 
-        // Click — place tab if in tab mode, otherwise start pan
+        // Click — place tab / select V-cut if in respective mode, otherwise start pan
         canvas.addEventListener('mousedown', e => {
             if (e.button !== 0) return;
 
@@ -3697,6 +4158,22 @@ self.onmessage = function(e) {
                 renderTabList();
                 updateRuntimeEstimate();
                 drawPreview();
+                return;
+            }
+
+            if (vcutSelectMode && vcutSegments.length) {
+                const rect = canvas.getBoundingClientRect();
+                const { x, y } = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
+                // Threshold: 5px in world coords — adapts to zoom level
+                const threshold = 5 / viewScale;
+                const idx = nearestVCutSegment(x, y, threshold);
+                if (idx >= 0) {
+                    if (vcutSelectedSet.has(idx)) vcutSelectedSet.delete(idx);
+                    else vcutSelectedSet.add(idx);
+                    updateVCutSelectedDisplay();
+                    updateRuntimeEstimate();
+                    drawPreview();
+                }
                 return;
             }
 
@@ -3738,12 +4215,13 @@ self.onmessage = function(e) {
     });
     fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
 
-    // Tool diameter change → rebuild toolpath + redraw
+    // Tool diameter change → rebuild toolpath + depanel toolpaths + redraw
     document.getElementById('toolDiam').addEventListener('input', () => {
         if (!outerContour) return;
         const toolDiam = parseFloat(document.getElementById('toolDiam').value);
         toolpath     = offsetPolygon(outerContour, toolDiam / 2);
         toolpathLens = computeArcLengths(toolpath);
+        if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
         updateRuntimeEstimate();
         drawPreview();
     });
@@ -3795,9 +4273,11 @@ self.onmessage = function(e) {
         // Show the right download buttons for the selected mode
         const isCombined = modeCombined.checked;
         downloadBtn.classList.toggle('hidden', !isCombined);
-        downloadTracesBtn.classList.toggle('hidden', isCombined || !gcodeTraces);
-        downloadDrillBtn.classList.toggle('hidden',  isCombined || !gcodeDrill);
-        downloadOutlineBtn.classList.toggle('hidden', isCombined || !gcodeOutline);
+        downloadTracesBtn.classList.toggle('hidden',  isCombined || !gcodeTraces);
+        downloadDrillBtn.classList.toggle('hidden',   isCombined || !gcodeDrill);
+        downloadOutlineBtn.classList.toggle('hidden',  isCombined || !gcodeOutline);
+        downloadVCutsBtn.classList.toggle('hidden',    isCombined || !gcodeVCuts);
+        downloadDepanelBtn.classList.toggle('hidden',  isCombined || !gcodeDepanel);
     });
 
     // Copy G-code (copies textarea content — combined text or full preview)
@@ -3859,6 +4339,76 @@ self.onmessage = function(e) {
         if (file) loadDrillFile(file);
     });
     drillFileInput.addEventListener('change', e => { if (e.target.files[0]) loadDrillFile(e.target.files[0]); });
+
+    // V-cut file drop zone
+    vcutDropZone.addEventListener('click', () => vcutFileInput.click());
+    clearVCutBtn.addEventListener('click', clearVCutFile);
+    vcutDropZone.addEventListener('dragover', e => { e.preventDefault(); vcutDropZone.classList.add('drag-over'); });
+    vcutDropZone.addEventListener('dragleave', () => vcutDropZone.classList.remove('drag-over'));
+    vcutDropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        vcutDropZone.classList.remove('drag-over');
+        const file = e.dataTransfer.files[0];
+        if (file) loadVCutFile(file);
+    });
+    vcutFileInput.addEventListener('change', e => { if (e.target.files[0]) loadVCutFile(e.target.files[0]); });
+
+    // Depanelize mode toggle
+    document.getElementById('depanelMode').addEventListener('change', e => {
+        depanelMode = e.target.checked;
+        document.getElementById('depanelOptions').classList.toggle('hidden', !depanelMode);
+        if (depanelMode && parsedContours.length >= 2) {
+            depanelToolpaths = buildDepanelToolpaths();
+        } else {
+            depanelToolpaths = [];
+        }
+        refreshUiState();
+        drawPreview();
+        updateRuntimeEstimate();
+    });
+
+    document.getElementById('depanelCutOuter').addEventListener('change', e => {
+        depanelCutOuter = e.target.checked;
+        drawPreview();
+    });
+
+    // V-cut and depanel param changes → update runtime estimate
+    ['vcutDepth', 'vcutFeedRate', 'depanelAutoTabs'].forEach(id => {
+        document.getElementById(id).addEventListener('input', updateRuntimeEstimate);
+    });
+
+    // V-cut line selection mode toggle
+    vcutSelectBtn.addEventListener('click', () => {
+        vcutSelectMode = !vcutSelectMode;
+        vcutSelectBtn.classList.toggle('active', vcutSelectMode);
+        canvas.classList.toggle('vcut-select', vcutSelectMode);
+        vcutSelectHint.style.display = vcutSelectMode ? 'block' : 'none';
+        // Exit tab mode if active (can't have both)
+        if (vcutSelectMode && tabModeActive) {
+            tabModeActive = false;
+            tabModeBtn.classList.remove('active');
+            canvas.classList.remove('tab-mode');
+            tabHint.style.display = 'none';
+        }
+    });
+
+    document.getElementById('vcutSelectAllBtn').addEventListener('click', () => {
+        vcutSelectedSet = new Set(vcutSegments.map((_, i) => i));
+        updateVCutSelectedDisplay();
+        updateRuntimeEstimate();
+        drawPreview();
+    });
+
+    document.getElementById('vcutDeselectAllBtn').addEventListener('click', () => {
+        vcutSelectedSet = new Set();
+        updateVCutSelectedDisplay();
+        updateRuntimeEstimate();
+        drawPreview();
+    });
+
+    // Download V-cuts and depanel G-code files
+    downloadVCutsBtn.addEventListener('click',   () => downloadNC(gcodeVCuts,   'pcbmill-vcuts.nc'));
+    downloadDepanelBtn.addEventListener('click', () => downloadNC(gcodeDepanel, 'pcbmill-depanel.nc'));
 
     // V-bit angle → update visuals at current depth (don't overwrite depth)
     document.getElementById('vbitAngle').addEventListener('input', () => {
