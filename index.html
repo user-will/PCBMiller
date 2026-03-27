@@ -552,6 +552,8 @@
         #preview.panning { cursor: grabbing; }
         #preview.tab-mode { cursor: crosshair; }
         #preview.vcut-select { cursor: crosshair; }
+        #preview.iso-select { cursor: crosshair; }
+        #preview.edge-select { cursor: crosshair; }
         .preview-hint {
             position: absolute;
             left: 14px;
@@ -810,6 +812,19 @@
                 </div>
             </div>
             <div class="computing-msg" id="isoComputingMsg">Computing paths…</div>
+            <div class="info-row">
+                <span class="info-label">Isolation paths</span>
+                <span class="info-value" id="infoIsoSelectable">—</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Selected</span>
+                <span class="info-value" id="infoIsoSelected">—</span>
+            </div>
+            <button class="btn-tab-mode" id="isoSelectBtn">+ Select Paths on Canvas</button>
+            <div style="display:flex;gap:6px;margin-top:6px">
+                <button class="btn-secondary" id="isoSelectAllBtn" style="flex:1">Select All</button>
+                <button class="btn-secondary" id="isoDeselectAllBtn" style="flex:1">Deselect All</button>
+            </div>
             <hr class="section-divider">
         </div>
 
@@ -965,6 +980,19 @@
                     <div class="hint">0 = no tabs; tabs spaced evenly around each sub-board</div>
                 </div>
             </div>
+            <div class="info-row">
+                <span class="info-label">Contours</span>
+                <span class="info-value" id="infoEdgeContours">—</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Selected</span>
+                <span class="info-value" id="infoEdgeSelected">—</span>
+            </div>
+            <button class="btn-tab-mode" id="edgeSelectBtn">+ Select Contours on Canvas</button>
+            <div style="display:flex;gap:6px;margin-top:6px">
+                <button class="btn-secondary" id="edgeSelectAllBtn" style="flex:1">Select All</button>
+                <button class="btn-secondary" id="edgeDeselectAllBtn" style="flex:1">Deselect All</button>
+            </div>
             <hr class="section-divider">
         </div>
 
@@ -1084,6 +1112,8 @@
                         <div class="preview-hint" id="previewHint">Scroll to zoom · Drag to pan</div>
                         <div class="tab-hint" id="tabHint">Click on the red toolpath to place a tab · click the button again to exit</div>
                         <div class="tab-hint" id="vcutSelectHint" style="background:rgba(0,212,212,0.1);border-color:rgba(0,212,212,0.3);color:#00d4d4">Click a line to select/deselect it · click the button again to exit</div>
+                        <div class="tab-hint" id="isoSelectHint" style="background:rgba(255,93,97,0.1);border-color:rgba(255,93,97,0.28);color:#ff8f92">Click a path to select/deselect it · click the button again to exit</div>
+                        <div class="tab-hint" id="edgeSelectHint" style="background:rgba(116,180,255,0.1);border-color:rgba(116,180,255,0.28);color:#74b4ff">Click a contour to select/deselect it · click the button again to exit</div>
                     </div>
                 </div>
             </section>
@@ -1119,6 +1149,11 @@
     let vcutSegments   = [];   // [{x1,y1,x2,y2}] raw D01 strokes from V-cut Gerber
     let vcutSelectedSet = new Set(); // indices of selected V-cut segments (default: all)
     let vcutSelectMode = false;
+    let isoSelectedSet = new Set(); // indices of selected isolation toolpaths
+    let isoSelectMode = false;
+    let edgeSelectedSet = new Set(); // indices of selected board contours
+    let edgeSelectMode = false;
+    let edgeContourToolpaths = []; // offset toolpath per parsed contour
     let depanelToolpaths = []; // cached offset contours per sub-board (for depanelization)
     let depanelMode    = false;
     let depanelCutOuter = false;
@@ -1194,6 +1229,10 @@
     const vcutSection     = document.getElementById('vcutSection');
     const vcutSelectBtn   = document.getElementById('vcutSelectBtn');
     const vcutSelectHint  = document.getElementById('vcutSelectHint');
+    const isoSelectBtn    = document.getElementById('isoSelectBtn');
+    const isoSelectHint   = document.getElementById('isoSelectHint');
+    const edgeSelectBtn   = document.getElementById('edgeSelectBtn');
+    const edgeSelectHint  = document.getElementById('edgeSelectHint');
     const tabModeBtn     = document.getElementById('tabModeBtn');
     const tabList        = document.getElementById('tabList');
     const tabHint        = document.getElementById('tabHint');
@@ -1204,6 +1243,7 @@
     function hasCopperLoaded() { return copperSegments.length || copperFlashes.length || copperRegions.length; }
     function hasDrillLoaded() { return drillHoles.length > 0; }
     function hasVCutsLoaded() { return vcutSegments.length > 0; }
+    function getOuterContourIndex() { return outerContour ? parsedContours.indexOf(outerContour) : -1; }
 
     function formatMinutes(totalMinutes) {
         if (!isFinite(totalMinutes) || totalMinutes <= 0) return '—';
@@ -1287,6 +1327,8 @@
             headerRunTime.textContent = '—';
             headerIsoPaths.textContent = '—';
             headerDrillCount.textContent = '—';
+            updateIsoSelectedDisplay();
+            updateEdgeSelectedDisplay();
             return;
         }
 
@@ -1302,6 +1344,8 @@
         headerBoardDims.textContent = dims ? `${dims.width.toFixed(1)}×${dims.height.toFixed(1)}` : '—';
         headerIsoPaths.textContent = hasCopper ? String(copperToolpaths.length) : '—';
         headerDrillCount.textContent = hasDrill ? String(drillHoles.length) : '—';
+        updateIsoSelectedDisplay();
+        updateEdgeSelectedDisplay();
         updateRuntimeEstimate();
     }
 
@@ -1311,10 +1355,11 @@
         const plungeRate = Math.max(1, parseFloat(document.getElementById('plungeRate').value) || 60);
         const spindleDelay = Math.max(0, parseFloat(document.getElementById('spindleDelay').value) || 0);
 
-        if (copperToolpaths.length) {
+        const activeIsoPaths = copperToolpaths.filter((_, i) => isoSelectedSet.has(i));
+        if (activeIsoPaths.length) {
             const feed = Math.max(1, parseFloat(document.getElementById('isoFeedRate').value) || 200);
             const depth = parseFloat(document.getElementById('isoDepth').value) || 0.1;
-            for (const path of copperToolpaths) {
+            for (const path of activeIsoPaths) {
                 if (path.length < 2) continue;
                 const start = toGC(path[0]);
                 minutes += Math.hypot(start.x, start.y) / feed;
@@ -1342,7 +1387,9 @@
             minutes += spindleDelay * bitCount / 60;
         }
 
-        if (toolpath && toolpathLens && toolpathLens.length) {
+        const outerContourIndex = getOuterContourIndex();
+        const selectedOuterToolpath = outerContourIndex >= 0 && edgeSelectedSet.has(outerContourIndex) ? toolpath : null;
+        if (!depanelMode && selectedOuterToolpath && toolpathLens && toolpathLens.length) {
             const feed = Math.max(1, parseFloat(document.getElementById('feedRate').value) || 200);
             const cutDepth = parseFloat(document.getElementById('cutDepth').value) || 1.6;
             const passDepth = parseFloat(document.getElementById('passDepth').value) || 1.8;
@@ -1353,6 +1400,26 @@
                 minutes += Math.hypot(start.x, start.y) / feed;
                 minutes += total / feed;
                 minutes += ((safeZ + Math.abs(passZ)) * 2) / plungeRate;
+            }
+        }
+
+        if (!depanelMode && edgeContourToolpaths.length) {
+            const feed = Math.max(1, parseFloat(document.getElementById('feedRate').value) || 200);
+            const cutDepth = parseFloat(document.getElementById('cutDepth').value) || 1.6;
+            const passDepth = parseFloat(document.getElementById('passDepth').value) || 1.8;
+            const passes = buildPasses(cutDepth, passDepth);
+            for (let i = 0; i < edgeContourToolpaths.length; i++) {
+                if (i === outerContourIndex || !edgeSelectedSet.has(i)) continue;
+                const tp = edgeContourToolpaths[i];
+                if (!tp || tp.length < 2) continue;
+                const lens = computeArcLengths(tp);
+                const total = lens[lens.length - 1];
+                const start = toGC(tp[0]);
+                for (const passZ of passes) {
+                    minutes += Math.hypot(start.x, start.y) / feed;
+                    minutes += total / feed;
+                    minutes += ((safeZ + Math.abs(passZ)) * 2) / plungeRate;
+                }
             }
         }
 
@@ -1401,6 +1468,9 @@
         boardBounds = null;
         toolpath = null;
         toolpathLens = null;
+        edgeContourToolpaths = [];
+        edgeSelectedSet = new Set();
+        edgeSelectMode = false;
         depanelToolpaths = [];
         tabs = [];
         tabModeActive = false;
@@ -1409,8 +1479,10 @@
         errorMsg.textContent = '';
         dropZone.classList.remove('loaded');
         tabModeBtn.classList.remove('active');
-        canvas.classList.remove('tab-mode');
+        edgeSelectBtn.classList.remove('active');
+        canvas.classList.remove('tab-mode', 'edge-select');
         tabHint.style.display = 'none';
+        edgeSelectHint.style.display = 'none';
         renderTabList();
         if (hasCopperLoaded()) rebuildIsolation();
         refreshUiState();
@@ -1422,11 +1494,18 @@
         copperFlashes = [];
         copperRegions = [];
         copperToolpaths = [];
+        isoSelectedSet = new Set();
+        isoSelectMode = false;
         copperBounds = null;
         copperFilenameEl.textContent = '';
         copperFileInput.value = '';
         copperErrorMsg.textContent = '';
         copperDropZone.classList.remove('copper-loaded', 'loaded');
+        isoSelectBtn.classList.remove('active');
+        canvas.classList.remove('iso-select');
+        isoSelectHint.style.display = 'none';
+        document.getElementById('infoIsoSelectable').textContent = '—';
+        document.getElementById('infoIsoSelected').textContent = '—';
         refreshUiState();
         drawPreview();
     }
@@ -1470,10 +1549,7 @@
     function clearVCutFile() {
         vcutSegments = [];
         vcutSelectedSet = new Set();
-        vcutSelectMode = false;
-        vcutSelectBtn.classList.remove('active');
-        canvas.classList.remove('vcut-select');
-        vcutSelectHint.style.display = 'none';
+        disableVCutSelectMode();
         vcutFilenameEl.textContent = '';
         vcutFileInput.value = '';
         vcutErrorMsg.textContent = '';
@@ -1487,6 +1563,55 @@
     function updateVCutSelectedDisplay() {
         document.getElementById('infoVCutSelected').textContent =
             `${vcutSelectedSet.size} / ${vcutSegments.length}`;
+    }
+
+    function updateIsoSelectedDisplay() {
+        document.getElementById('infoIsoSelectable').textContent = copperToolpaths.length ? copperToolpaths.length : '—';
+        document.getElementById('infoIsoSelected').textContent = copperToolpaths.length
+            ? `${isoSelectedSet.size} / ${copperToolpaths.length}`
+            : '—';
+    }
+
+    function updateEdgeSelectedDisplay() {
+        document.getElementById('infoEdgeContours').textContent = parsedContours.length ? parsedContours.length : '—';
+        document.getElementById('infoEdgeSelected').textContent = parsedContours.length
+            ? `${edgeSelectedSet.size} / ${parsedContours.length}`
+            : '—';
+    }
+
+    function disableTabMode() {
+        tabModeActive = false;
+        tabModeBtn.classList.remove('active');
+        canvas.classList.remove('tab-mode');
+        tabHint.style.display = 'none';
+    }
+
+    function disableVCutSelectMode() {
+        vcutSelectMode = false;
+        vcutSelectBtn.classList.remove('active');
+        canvas.classList.remove('vcut-select');
+        vcutSelectHint.style.display = 'none';
+    }
+
+    function disableIsoSelectMode() {
+        isoSelectMode = false;
+        isoSelectBtn.classList.remove('active');
+        canvas.classList.remove('iso-select');
+        isoSelectHint.style.display = 'none';
+    }
+
+    function disableEdgeSelectMode() {
+        edgeSelectMode = false;
+        edgeSelectBtn.classList.remove('active');
+        canvas.classList.remove('edge-select');
+        edgeSelectHint.style.display = 'none';
+    }
+
+    function disableOtherInteractionModes(except) {
+        if (except !== 'tab') disableTabMode();
+        if (except !== 'vcut') disableVCutSelectMode();
+        if (except !== 'iso') disableIsoSelectMode();
+        if (except !== 'edge') disableEdgeSelectMode();
     }
 
     // =========================================================
@@ -1976,7 +2101,17 @@
         if (parsedContours.length < 2) return [];
         const sorted = [...parsedContours].sort((a, b) => Math.abs(signedArea(b)) - Math.abs(signedArea(a)));
         const toolR = parseFloat(document.getElementById('toolDiam').value) / 2;
-        return sorted.slice(1).map(c => offsetPolygon(c, toolR));
+        return sorted
+            .map((contour, sortedIdx) => ({ contour, index: parsedContours.indexOf(contour), sortedIdx }))
+            .slice(1)
+            .filter(({ index }) => edgeSelectedSet.has(index))
+            .map(({ contour }) => offsetPolygon(contour, toolR));
+    }
+
+    function buildEdgeContourToolpaths() {
+        if (!parsedContours.length) return [];
+        const toolR = parseFloat(document.getElementById('toolDiam').value) / 2;
+        return parsedContours.map(contour => offsetPolygon(contour, toolR));
     }
 
     // Nearest-neighbor sort for open line segments (bi-directional: each segment can be entered from either end).
@@ -2022,6 +2157,33 @@
             if (dSq < bestDistSq) { bestDistSq = dSq; bestIdx = i; }
         }
         return bestIdx;
+    }
+
+    function nearestClosedPathIndex(paths, wx, wy, threshold) {
+        let bestIdx = -1;
+        let bestDistSq = threshold * threshold;
+        for (let i = 0; i < paths.length; i++) {
+            const path = paths[i];
+            if (!path || path.length < 2) continue;
+            for (let j = 0; j < path.length; j++) {
+                const a = path[j];
+                const b = path[(j + 1) % path.length];
+                const dSq = pointToSegmentDistSq(wx, wy, a.x, a.y, b.x, b.y);
+                if (dSq < bestDistSq) {
+                    bestDistSq = dSq;
+                    bestIdx = i;
+                }
+            }
+        }
+        return bestIdx;
+    }
+
+    function nearestIsoPath(wx, wy, threshold) {
+        return nearestClosedPathIndex(copperToolpaths, wx, wy, threshold);
+    }
+
+    function nearestEdgeContour(wx, wy, threshold) {
+        return nearestClosedPathIndex(edgeContourToolpaths, wx, wy, threshold);
     }
 
     // Pure version of pointAtLength that works on any path + arc-lengths array (no globals).
@@ -2227,7 +2389,9 @@ self.onmessage = function(e) {
         _isoWorker = new Worker(URL.createObjectURL(blob));
         _isoWorker.onmessage = e => {
             copperToolpaths = e.data;
+            isoSelectedSet = new Set(copperToolpaths.map((_, i) => i));
             infoIsoPaths.textContent = copperToolpaths.length;
+            updateIsoSelectedDisplay();
             document.getElementById('isoComputingMsg').style.display = 'none';
             refreshUiState();
             drawPreview();
@@ -2635,9 +2799,21 @@ self.onmessage = function(e) {
         ctx.save();
         ctx.translate(viewOffX, viewOffY);
         ctx.scale(viewScale, viewScale);
+        const activeSelectLayer = vcutSelectMode ? 'vcut'
+            : isoSelectMode ? 'iso'
+            : edgeSelectMode ? 'edge'
+            : null;
+        const inactiveAlpha = 0.08;
+        const withLayerFocus = (layer, draw) => {
+            ctx.save();
+            ctx.globalAlpha = activeSelectLayer && activeSelectLayer !== layer ? inactiveAlpha : 1;
+            draw();
+            ctx.restore();
+        };
 
         const dims = boardBounds || copperBounds;
-        if (dims) {
+        withLayerFocus('edge', () => {
+            if (!dims) return;
             const pad = 6 / viewScale;
             const x = dims.minX - pad;
             const y = dims.minY - pad;
@@ -2649,77 +2825,82 @@ self.onmessage = function(e) {
             stageGlow.addColorStop(1, 'rgba(116,180,255,0.05)');
             ctx.fillStyle = stageGlow;
             ctx.fillRect(x, y, w, h);
-        }
+        });
 
-        // Isolation toolpaths — drawn at the actual cut width produced by the V-bit
-        // (tip diameter + 2 × depth × tan(half-angle)), not just the tip diameter
-        if (copperToolpaths.length) {
+        withLayerFocus('iso', () => {
+            if (!copperToolpaths.length) return;
             const tipDiam  = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
             const angle    = parseFloat(document.getElementById('vbitAngle').value) || 30;
             const depth    = Math.abs(parseFloat(document.getElementById('isoDepth').value) || 0.05);
             const cutWidth = tipDiam + 2 * depth * Math.tan((angle / 2) * (Math.PI / 180));
-            ctx.strokeStyle = 'rgba(255, 93, 97, 0.84)';
-            ctx.lineWidth   = cutWidth;  // world-space width = actual cut width at this depth
-            ctx.lineCap     = 'round';
-            ctx.lineJoin    = 'round';
-            for (const path of copperToolpaths) {
+            ctx.lineCap  = 'round';
+            ctx.lineJoin = 'round';
+            for (let pathIndex = 0; pathIndex < copperToolpaths.length; pathIndex++) {
+                const path = copperToolpaths[pathIndex];
+                const isSelected = isoSelectedSet.has(pathIndex);
+                if (!isSelected && !isoSelectMode) continue;
                 if (path.length < 2) continue;
                 ctx.beginPath();
                 ctx.moveTo(path[0].x, path[0].y);
                 for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
                 ctx.closePath();
+                ctx.strokeStyle = isSelected ? 'rgba(255, 93, 97, 0.84)' : 'rgba(255, 179, 182, 0.18)';
+                ctx.lineWidth = cutWidth;
                 ctx.stroke();
-                ctx.strokeStyle = 'rgba(255, 179, 182, 0.28)';
+                ctx.strokeStyle = isSelected ? 'rgba(255, 179, 182, 0.28)' : 'rgba(255, 179, 182, 0.08)';
                 ctx.lineWidth = Math.max(cutWidth * 0.22, 0.02);
                 ctx.stroke();
-                ctx.strokeStyle = 'rgba(255, 93, 97, 0.84)';
-                ctx.lineWidth = cutWidth;
             }
-            ctx.lineCap   = 'butt';
-            ctx.lineJoin  = 'miter';
-        }
-
-        // Copper — regions (KiCad 6+ polygon fills), then strokes, then flashes
-        ctx.fillStyle = 'rgba(255,177,74,0.88)';
-        for (const region of copperRegions) {
-            if (region.length < 3) continue;
-            ctx.beginPath();
-            ctx.moveTo(region[0].x, region[0].y);
-            for (let i = 1; i < region.length; i++) ctx.lineTo(region[i].x, region[i].y);
-            ctx.closePath();
-            ctx.fill();
-        }
-        for (const seg of copperSegments) {
-            ctx.beginPath();
-            ctx.moveTo(seg.x1, seg.y1);
-            ctx.lineTo(seg.x2, seg.y2);
-            ctx.strokeStyle = 'rgba(255,177,74,0.9)';
-            ctx.lineWidth = seg.r * 2;
-            ctx.lineCap = 'round';
-            ctx.stroke();
             ctx.lineCap = 'butt';
-        }
-        for (const flash of copperFlashes) {
-            const poly = flashBuffer(flash.x, flash.y, flash.ap, 0);
-            if (poly.length < 3) continue;
-            ctx.beginPath();
-            ctx.moveTo(poly[0].x, poly[0].y);
-            for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
-            ctx.closePath();
-            ctx.fillStyle = 'rgba(255,177,74,0.9)';
-            ctx.fill();
-        }
+            ctx.lineJoin = 'miter';
+        });
 
-        // Board contour
-        for (const contour of parsedContours) {
-            ctx.save();
-            ctx.setLineDash([1.4 / viewScale, 1.4 / viewScale]);
-            drawPolyline(contour, 'rgba(184, 198, 214, 0.98)', 1.2);
-            ctx.restore();
-        }
+        withLayerFocus('copper', () => {
+            ctx.fillStyle = 'rgba(255,177,74,0.88)';
+            for (const region of copperRegions) {
+                if (region.length < 3) continue;
+                ctx.beginPath();
+                ctx.moveTo(region[0].x, region[0].y);
+                for (let i = 1; i < region.length; i++) ctx.lineTo(region[i].x, region[i].y);
+                ctx.closePath();
+                ctx.fill();
+            }
+            for (const seg of copperSegments) {
+                ctx.beginPath();
+                ctx.moveTo(seg.x1, seg.y1);
+                ctx.lineTo(seg.x2, seg.y2);
+                ctx.strokeStyle = 'rgba(255,177,74,0.9)';
+                ctx.lineWidth = seg.r * 2;
+                ctx.lineCap = 'round';
+                ctx.stroke();
+                ctx.lineCap = 'butt';
+            }
+            for (const flash of copperFlashes) {
+                const poly = flashBuffer(flash.x, flash.y, flash.ap, 0);
+                if (poly.length < 3) continue;
+                ctx.beginPath();
+                ctx.moveTo(poly[0].x, poly[0].y);
+                for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+                ctx.closePath();
+                ctx.fillStyle = 'rgba(255,177,74,0.9)';
+                ctx.fill();
+            }
+        });
 
-        // Drill holes
-        if (drillHoles.length) {
+        withLayerFocus('edge', () => {
+            for (let i = 0; i < parsedContours.length; i++) {
+                const contour = parsedContours[i];
+                const isSelected = edgeSelectedSet.has(i);
+                if (!isSelected && !edgeSelectMode) continue;
+                ctx.save();
+                ctx.setLineDash([1.4 / viewScale, 1.4 / viewScale]);
+                drawPolyline(contour, isSelected ? 'rgba(184, 198, 214, 0.98)' : 'rgba(184, 198, 214, 0.18)', 1.2);
+                ctx.restore();
+            }
+        });
+
+        withLayerFocus('drill', () => {
+            if (!drillHoles.length) return;
             ctx.strokeStyle = '#d9a6ff';
             ctx.lineWidth   = 0.06;
             ctx.lineCap     = 'round';
@@ -2734,56 +2915,61 @@ self.onmessage = function(e) {
                 ctx.stroke();
             }
             ctx.lineCap = 'butt';
-        }
+        });
 
-        // V-cut score lines — selected in teal, deselected dimmed
-        if (vcutSegments.length) {
+        withLayerFocus('vcut', () => {
+            if (!vcutSegments.length) return;
             ctx.lineWidth = 1.5 / viewScale;
             ctx.lineCap   = 'round';
             for (let i = 0; i < vcutSegments.length; i++) {
                 const seg = vcutSegments[i];
-                ctx.strokeStyle = vcutSelectedSet.has(i) ? '#00d4d4' : 'rgba(0,180,180,0.2)';
+                const isSelected = vcutSelectedSet.has(i);
+                if (!isSelected && !vcutSelectMode) continue;
+                ctx.strokeStyle = isSelected ? '#00d4d4' : 'rgba(0,180,180,0.18)';
                 ctx.beginPath();
                 ctx.moveTo(seg.x1, seg.y1);
                 ctx.lineTo(seg.x2, seg.y2);
                 ctx.stroke();
             }
             ctx.lineCap = 'butt';
-        }
+        });
 
-        // Edge cut toolpath (or depanel toolpaths when in depanelize mode)
-        if (depanelMode && depanelToolpaths.length) {
-            for (const tp of depanelToolpaths) {
-                drawPolyline(tp, '#74b4ff', 2.6);
+        withLayerFocus('edge', () => {
+            const outerContourIndex = getOuterContourIndex();
+            if (depanelMode && depanelToolpaths.length) {
+                for (const tp of depanelToolpaths) {
+                    drawPolyline(tp, '#74b4ff', 2.6);
+                }
+                if (depanelCutOuter && toolpath && outerContourIndex >= 0 && edgeSelectedSet.has(outerContourIndex)) {
+                    drawPolyline(toolpath, 'rgba(116,180,255,0.5)', 2.0);
+                }
+            } else if (edgeContourToolpaths.length) {
+                for (let i = 0; i < edgeContourToolpaths.length; i++) {
+                    const tp = edgeContourToolpaths[i];
+                    const isSelected = edgeSelectedSet.has(i);
+                    if (!isSelected && !edgeSelectMode) continue;
+                    drawPolyline(tp, isSelected ? '#74b4ff' : 'rgba(116,180,255,0.18)', 2.6);
+                }
             }
-            if (depanelCutOuter && toolpath) {
-                drawPolyline(toolpath, 'rgba(116,180,255,0.5)', 2.0);
-            }
-        } else if (toolpath) {
-            drawPolyline(toolpath, '#74b4ff', 2.6);
-        }
+        });
 
-        // Tabs
-        if (toolpath && tabs.length) {
+        withLayerFocus('edge', () => {
+            const outerContourIndex = getOuterContourIndex();
+            if (!(toolpath && tabs.length && outerContourIndex >= 0 && edgeSelectedSet.has(outerContourIndex))) return;
             const total = toolpathLens[toolpathLens.length - 1];
             for (const tab of tabs) {
                 const halfW = tab.width / 2;
                 const cLen = tab.t * total;
                 const pt = pointAtLength(cLen);
-
-                // Tangent direction at tab center
                 const ahead = pointAtLength(cLen + 0.5);
                 const behind = pointAtLength(cLen - 0.5);
                 const tx = ahead.x - behind.x, ty = ahead.y - behind.y;
                 const tl = Math.sqrt(tx * tx + ty * ty);
                 const tnx = tl > 0.001 ? tx / tl : 1;
                 const tny = tl > 0.001 ? ty / tl : 0;
-
-                // Start/end of tab along the toolpath
                 const s = pointAtLength(cLen - halfW);
                 const e = pointAtLength(cLen + halfW);
 
-                // Draw a green bar over the tab region
                 ctx.beginPath();
                 ctx.moveTo(s.x, s.y);
                 ctx.lineTo(e.x, e.y);
@@ -2791,7 +2977,6 @@ self.onmessage = function(e) {
                 ctx.lineWidth = 4 / viewScale;
                 ctx.stroke();
 
-                // Draw perpendicular tick at center
                 const tickSize = 2;
                 ctx.beginPath();
                 ctx.moveTo(pt.x - tny * tickSize, pt.y + tnx * tickSize);
@@ -2800,7 +2985,7 @@ self.onmessage = function(e) {
                 ctx.lineWidth = 1.5 / viewScale;
                 ctx.stroke();
             }
-        }
+        });
 
         ctx.restore();
 
@@ -3406,11 +3591,35 @@ self.onmessage = function(e) {
         lines.push(...optimizeMotionOutput(optimized));
     }
 
+    function emitClosedPathPassLines(lines, path, passZ, safeZ, feedRate, plungeRate, f) {
+        if (!path || path.length < 2) return;
+        const start = toGC(path[0]);
+        lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
+        lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
+        for (let i = 1; i < path.length; i++) {
+            const pt = toGC(path[i]);
+            lines.push(`G1 X${f(pt.x)} Y${f(pt.y)} F${feedRate}`);
+        }
+        lines.push(`G1 X${f(start.x)} Y${f(start.y)} F${feedRate}  ; close`);
+        lines.push(`G0 Z${f(safeZ)}  ; retract`);
+    }
+
     function generateGcode() {
         const activeVCuts = vcutSegments.filter((_, i) => vcutSelectedSet.has(i));
+        const activeIsolationPaths = copperToolpaths.filter((_, i) => isoSelectedSet.has(i));
+        const outerContourIndex = getOuterContourIndex();
+        const selectedOuterToolpath = outerContourIndex >= 0 && edgeSelectedSet.has(outerContourIndex) ? toolpath : null;
+        const selectedInnerEdgeToolpaths = edgeContourToolpaths.filter((tp, i) => i !== outerContourIndex && edgeSelectedSet.has(i));
+        const activeDepanelToolpaths = depanelMode && parsedContours.length >= 2
+            ? (depanelToolpaths.length ? depanelToolpaths : buildDepanelToolpaths())
+            : [];
         const hasVCuts   = activeVCuts.length > 0;
-        const hasDepanel = depanelMode && parsedContours.length >= 2;
-        if (!toolpath && !copperToolpaths.length && !drillHoles.length && !hasVCuts) return '';
+        const hasIsolation = activeIsolationPaths.length > 0;
+        const hasDepanel = activeDepanelToolpaths.length > 0;
+        const hasEdgeCuts = !depanelMode
+            ? (!!selectedOuterToolpath || selectedInnerEdgeToolpaths.length > 0)
+            : (!!selectedOuterToolpath && depanelCutOuter);
+        if (!hasEdgeCuts && !hasIsolation && !drillHoles.length && !hasVCuts && !hasDepanel) return '';
 
         // Compute canonical bounds once for all operations.
         // For drill-only or V-cut-only files, synthesize bounds from geometry.
@@ -3439,7 +3648,6 @@ self.onmessage = function(e) {
         const spindleDelay = parseInt(document.getElementById('spindleDelay').value) || 0;
         const f = n => n.toFixed(3);
 
-        const hasIsolation = copperToolpaths.length > 0;
         const hasDrill     = drillHoles.length > 0;
         const combined     = modeCombined.checked;
 
@@ -3472,9 +3680,6 @@ self.onmessage = function(e) {
             passes     = buildPasses(cutDepthUi, passDepth);
         }
 
-        // Normal edge cuts: run only if not in depanelMode, or if depanelCutOuter is checked
-        const hasEdgeCuts = !!toolpath && (!depanelMode || depanelCutOuter);
-
         // V-cut params
         let vcutDepthVal = -0.3, vcutFeedRate = 150;
         if (hasVCuts) {
@@ -3491,7 +3696,7 @@ self.onmessage = function(e) {
 
         // --- Build content for each operation ---
         const isolationLines = [];
-        if (hasIsolation) emitIsolationLines(isolationLines, copperToolpaths, isoDepth, safeZ, isoFeedRate, plungeRate, f);
+        if (hasIsolation) emitIsolationLines(isolationLines, activeIsolationPaths, isoDepth, safeZ, isoFeedRate, plungeRate, f);
 
         const vcutLines = [];
         if (hasVCuts) emitVCutLines(vcutLines, activeVCuts, vcutDepthVal, safeZ, vcutFeedRate, plungeRate, f);
@@ -3501,19 +3706,29 @@ self.onmessage = function(e) {
 
         const depanelLines = [];
         if (hasDepanel) {
-            const dtp = depanelToolpaths.length ? depanelToolpaths : buildDepanelToolpaths();
-            emitDepanelLines(depanelLines, dtp, passes, safeZ, feedRate, plungeRate, tabLayers, depanelAutoTabCount, depanelTabWidth, f);
+            emitDepanelLines(depanelLines, activeDepanelToolpaths, passes, safeZ, feedRate, plungeRate, tabLayers, depanelAutoTabCount, depanelTabWidth, f);
         }
 
         const edgeLines = [];
         if (hasEdgeCuts) {
             edgeLines.push('');
             edgeLines.push('; === EDGE CUTS ===');
-            passes.forEach((passZ, i) => {
-                const useTabs = tabs.length > 0 && i >= passes.length - tabLayers;
+            if (selectedOuterToolpath) {
+                passes.forEach((passZ, i) => {
+                    const useTabs = tabs.length > 0 && i >= passes.length - tabLayers;
+                    edgeLines.push('');
+                    edgeLines.push(`; --- Outer contour pass ${i + 1}/${passes.length}: Z${f(passZ)}${useTabs ? ' (tabs)' : ''} ---`);
+                    emitPassLines(edgeLines, passZ, safeZ, feedRate, plungeRate, useTabs, f);
+                });
+            }
+            selectedInnerEdgeToolpaths.forEach((path, contourIdx) => {
                 edgeLines.push('');
-                edgeLines.push(`; --- Pass ${i + 1}/${passes.length}: Z${f(passZ)}${useTabs ? ' (tabs)' : ''} ---`);
-                emitPassLines(edgeLines, passZ, safeZ, feedRate, plungeRate, useTabs, f);
+                edgeLines.push(`; --- Inner contour ${contourIdx + 1}/${selectedInnerEdgeToolpaths.length} ---`);
+                passes.forEach((passZ, passIdx) => {
+                    edgeLines.push('');
+                    edgeLines.push(`; Pass ${passIdx + 1}/${passes.length}: Z${f(passZ)}`);
+                    emitClosedPathPassLines(edgeLines, path, passZ, safeZ, feedRate, plungeRate, f);
+                });
             });
         }
 
@@ -3527,10 +3742,10 @@ self.onmessage = function(e) {
                 `; Board: ${gcBounds.width.toFixed(2)} x ${gcBounds.height.toFixed(2)} mm`,
                 `; Origin: place the board bottom-left corner at machine X0 Y0`,
             ];
-            if (hasIsolation) h.push(`; Isolation routing: ${copperToolpaths.length} paths, depth ${isoDepthUi} mm at ${isoFeedRate} mm/min`);
+            if (hasIsolation) h.push(`; Isolation routing: ${activeIsolationPaths.length} paths, depth ${isoDepthUi} mm at ${isoFeedRate} mm/min`);
             if (hasVCuts)     h.push(`; V-cut scoring: ${activeVCuts.length} lines, depth ${Math.abs(vcutDepthVal)} mm at ${vcutFeedRate} mm/min`);
             if (hasDrill)     h.push(`; Drilling: ${drillHoles.length} holes, depth ${drillDepthUi} mm, bits: ${drillBitSizes.join(', ')} mm`);
-            if (hasDepanel)   h.push(`; Depanelization: ${depanelToolpaths.length || '?'} sub-boards, depth ${cutDepthUi} mm, feed ${feedRate} mm/min`);
+            if (hasDepanel)   h.push(`; Depanelization: ${activeDepanelToolpaths.length} sub-boards, depth ${cutDepthUi} mm, feed ${feedRate} mm/min`);
             if (hasEdgeCuts)  h.push(`; Edge cuts: depth ${cutDepthUi} mm, ${passes.length} pass(es), feed ${feedRate} mm/min`);
             return h;
         }
@@ -3670,10 +3885,12 @@ self.onmessage = function(e) {
                 outerContour   = selectOuterContour(contours);
                 boardBounds    = computeBounds(outerContour);
                 tabs           = [];
+                edgeSelectedSet = new Set(contours.map((_, i) => i));
 
                 const toolDiam = parseFloat(document.getElementById('toolDiam').value);
                 toolpath     = offsetPolygon(outerContour, toolDiam / 2);
                 toolpathLens = computeArcLengths(toolpath);
+                edgeContourToolpaths = buildEdgeContourToolpaths();
                 if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
                 if (hasCopperLoaded()) rebuildIsolation();
 
@@ -3692,6 +3909,7 @@ self.onmessage = function(e) {
                 infoContours.textContent = contours.length;
                 updatePassCount();
                 updateTabHint();
+                updateEdgeSelectedDisplay();
                 refreshUiState();
 
                 renderTabList();
@@ -3724,6 +3942,7 @@ self.onmessage = function(e) {
                 copperFlashes   = flashes;
                 copperRegions   = regions;
                 copperToolpaths = [];
+                isoSelectedSet  = new Set();
                 rebuildIsolation(); // async — worker will call drawPreview when done
 
                 // Compute bounding box of all copper geometry
@@ -4145,7 +4364,7 @@ self.onmessage = function(e) {
             scheduleRedraw();
         }, { passive: false });
 
-        // Click — place tab / select V-cut if in respective mode, otherwise start pan
+        // Click — place tab / toggle selections if in active interaction mode, otherwise start pan
         canvas.addEventListener('mousedown', e => {
             if (e.button !== 0) return;
 
@@ -4171,6 +4390,35 @@ self.onmessage = function(e) {
                     if (vcutSelectedSet.has(idx)) vcutSelectedSet.delete(idx);
                     else vcutSelectedSet.add(idx);
                     updateVCutSelectedDisplay();
+                    updateRuntimeEstimate();
+                    drawPreview();
+                }
+                return;
+            }
+
+            if (isoSelectMode && copperToolpaths.length) {
+                const rect = canvas.getBoundingClientRect();
+                const { x, y } = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
+                const idx = nearestIsoPath(x, y, 5 / viewScale);
+                if (idx >= 0) {
+                    if (isoSelectedSet.has(idx)) isoSelectedSet.delete(idx);
+                    else isoSelectedSet.add(idx);
+                    updateIsoSelectedDisplay();
+                    updateRuntimeEstimate();
+                    drawPreview();
+                }
+                return;
+            }
+
+            if (edgeSelectMode && edgeContourToolpaths.length) {
+                const rect = canvas.getBoundingClientRect();
+                const { x, y } = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
+                const idx = nearestEdgeContour(x, y, 5 / viewScale);
+                if (idx >= 0) {
+                    if (edgeSelectedSet.has(idx)) edgeSelectedSet.delete(idx);
+                    else edgeSelectedSet.add(idx);
+                    if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
+                    updateEdgeSelectedDisplay();
                     updateRuntimeEstimate();
                     drawPreview();
                 }
@@ -4215,12 +4463,13 @@ self.onmessage = function(e) {
     });
     fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
 
-    // Tool diameter change → rebuild toolpath + depanel toolpaths + redraw
+    // Tool diameter change → rebuild contour toolpaths + depanel toolpaths + redraw
     document.getElementById('toolDiam').addEventListener('input', () => {
         if (!outerContour) return;
         const toolDiam = parseFloat(document.getElementById('toolDiam').value);
         toolpath     = offsetPolygon(outerContour, toolDiam / 2);
         toolpathLens = computeArcLengths(toolpath);
+        edgeContourToolpaths = buildEdgeContourToolpaths();
         if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
         updateRuntimeEstimate();
         drawPreview();
@@ -4255,7 +4504,9 @@ self.onmessage = function(e) {
 
     // Tab mode toggle
     tabModeBtn.addEventListener('click', () => {
-        tabModeActive = !tabModeActive;
+        const next = !tabModeActive;
+        disableOtherInteractionModes(next ? 'tab' : '');
+        tabModeActive = next;
         tabModeBtn.classList.toggle('active', tabModeActive);
         canvas.classList.toggle('tab-mode', tabModeActive);
         tabHint.style.display = tabModeActive ? 'block' : 'none';
@@ -4370,6 +4621,7 @@ self.onmessage = function(e) {
     document.getElementById('depanelCutOuter').addEventListener('change', e => {
         depanelCutOuter = e.target.checked;
         drawPreview();
+        updateRuntimeEstimate();
     });
 
     // V-cut and depanel param changes → update runtime estimate
@@ -4379,17 +4631,13 @@ self.onmessage = function(e) {
 
     // V-cut line selection mode toggle
     vcutSelectBtn.addEventListener('click', () => {
-        vcutSelectMode = !vcutSelectMode;
+        const next = !vcutSelectMode;
+        disableOtherInteractionModes(next ? 'vcut' : '');
+        vcutSelectMode = next;
         vcutSelectBtn.classList.toggle('active', vcutSelectMode);
         canvas.classList.toggle('vcut-select', vcutSelectMode);
         vcutSelectHint.style.display = vcutSelectMode ? 'block' : 'none';
-        // Exit tab mode if active (can't have both)
-        if (vcutSelectMode && tabModeActive) {
-            tabModeActive = false;
-            tabModeBtn.classList.remove('active');
-            canvas.classList.remove('tab-mode');
-            tabHint.style.display = 'none';
-        }
+        drawPreview();
     });
 
     document.getElementById('vcutSelectAllBtn').addEventListener('click', () => {
@@ -4402,6 +4650,56 @@ self.onmessage = function(e) {
     document.getElementById('vcutDeselectAllBtn').addEventListener('click', () => {
         vcutSelectedSet = new Set();
         updateVCutSelectedDisplay();
+        updateRuntimeEstimate();
+        drawPreview();
+    });
+
+    isoSelectBtn.addEventListener('click', () => {
+        const next = !isoSelectMode;
+        disableOtherInteractionModes(next ? 'iso' : '');
+        isoSelectMode = next;
+        isoSelectBtn.classList.toggle('active', isoSelectMode);
+        canvas.classList.toggle('iso-select', isoSelectMode);
+        isoSelectHint.style.display = isoSelectMode ? 'block' : 'none';
+        drawPreview();
+    });
+
+    document.getElementById('isoSelectAllBtn').addEventListener('click', () => {
+        isoSelectedSet = new Set(copperToolpaths.map((_, i) => i));
+        updateIsoSelectedDisplay();
+        updateRuntimeEstimate();
+        drawPreview();
+    });
+
+    document.getElementById('isoDeselectAllBtn').addEventListener('click', () => {
+        isoSelectedSet = new Set();
+        updateIsoSelectedDisplay();
+        updateRuntimeEstimate();
+        drawPreview();
+    });
+
+    edgeSelectBtn.addEventListener('click', () => {
+        const next = !edgeSelectMode;
+        disableOtherInteractionModes(next ? 'edge' : '');
+        edgeSelectMode = next;
+        edgeSelectBtn.classList.toggle('active', edgeSelectMode);
+        canvas.classList.toggle('edge-select', edgeSelectMode);
+        edgeSelectHint.style.display = edgeSelectMode ? 'block' : 'none';
+        drawPreview();
+    });
+
+    document.getElementById('edgeSelectAllBtn').addEventListener('click', () => {
+        edgeSelectedSet = new Set(parsedContours.map((_, i) => i));
+        if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
+        updateEdgeSelectedDisplay();
+        updateRuntimeEstimate();
+        drawPreview();
+    });
+
+    document.getElementById('edgeDeselectAllBtn').addEventListener('click', () => {
+        edgeSelectedSet = new Set();
+        if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
+        updateEdgeSelectedDisplay();
         updateRuntimeEstimate();
         drawPreview();
     });
