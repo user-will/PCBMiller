@@ -1955,6 +1955,78 @@
         return { segments: [], flashes: [], regions };
     }
 
+    function rotateLocalPoint(x, y, deg) {
+        const rad = deg * Math.PI / 180;
+        const c = Math.cos(rad), s = Math.sin(rad);
+        return { x: x * c - y * s, y: x * s + y * c };
+    }
+
+    function rotateLocalPoints(points, deg) {
+        return points.map(p => rotateLocalPoint(p.x, p.y, deg));
+    }
+
+    function localBounds(points) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const p of points) {
+            minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+            minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+        }
+        return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+    }
+
+    function parseApertureMacroPolygons(content) {
+        const macros = {};
+        const macroPattern = /%AM([A-Za-z][A-Za-z0-9_-]*)\*([\s\S]*?)\*%/g;
+        let m;
+        while ((m = macroPattern.exec(content)) !== null) {
+            const name = m[1].toUpperCase();
+            const primitive = m[2]
+                .split('*')
+                .map(line => line.trim())
+                .find(line => /^4\s*,/i.test(line));
+            if (!primitive) continue;
+            const parts = primitive.split(',').map(s => s.trim());
+            if (parts.length < 8 || parts[0] !== '4') continue;
+            const coordTokens = parts.slice(3, -1);
+            if (coordTokens.length < 6 || coordTokens.length % 2 !== 0) continue;
+            const points = [];
+            let ok = true;
+            for (let i = 0; i < coordTokens.length; i += 2) {
+                const x = Number(coordTokens[i]);
+                const y = Number(coordTokens[i + 1]);
+                if (!isFinite(x) || !isFinite(y)) { ok = false; break; }
+                points.push({ x, y: -y });
+            }
+            if (ok && points.length >= 3) macros[name] = { type: 'POLY', points };
+        }
+        return macros;
+    }
+
+    function approximateArcStrokeSegments(x1, y1, x2, y2, iVal, jVal, interpMode, strokeRadius = 0) {
+        const segments = [];
+        const arcCX = x1 + iVal;
+        const arcCY = y1 - jVal;
+        const r = Math.sqrt((x1 - arcCX) ** 2 + (y1 - arcCY) ** 2);
+        if (r <= 0.001) return segments;
+        let startAngle = Math.atan2(y1 - arcCY, x1 - arcCX);
+        let endAngle   = Math.atan2(y2 - arcCY, x2 - arcCX);
+        if (interpMode === 2) {
+            if (endAngle < startAngle) endAngle += 2 * Math.PI;
+        } else {
+            if (endAngle > startAngle) endAngle -= 2 * Math.PI;
+        }
+        const arcSegs = Math.max(4, Math.ceil(Math.abs(endAngle - startAngle) * r * 4));
+        let px = x1, py = y1;
+        for (let i = 1; i <= arcSegs; i++) {
+            const angle = startAngle + (endAngle - startAngle) * i / arcSegs;
+            const ax = arcCX + r * Math.cos(angle);
+            const ay = arcCY + r * Math.sin(angle);
+            segments.push({ x1: px, y1: py, x2: ax, y2: ay, r: strokeRadius });
+            px = ax; py = ay;
+        }
+        return segments;
+    }
+
     // Parse a copper Gerber layer.
     // Handles D01 strokes, D03 flashes (older style) AND G36/G37 region fills (KiCad 6+ style).
     function parseCopperLayer(content) {
@@ -1963,6 +2035,7 @@
         if (fmtMatch) { xDec = parseInt(fmtMatch[1]); yDec = parseInt(fmtMatch[2]); }
         const toMM = content.includes('%MOIN*%') ? 25.4 : 1;
         function toVal(s, dec) { return parseInt(s) / Math.pow(10, dec) * toMM; }
+        const macroPolys = parseApertureMacroPolygons(content);
 
         // Parse aperture definitions (%ADD<n><type>,<params>*%)
         // Type can be a single letter (C/R/O/P) or a macro name (e.g. RoundRect).
@@ -1994,6 +2067,32 @@
                     const h  = Math.max(...ys) - Math.min(...ys) + 2 * r;
                     if (w > 0 && h > 0) apertures[code] = { type: 'R', w, h };
                 }
+            } else if (type === 'HORIZOVAL') {
+                if (all.length >= 5) {
+                    const diam = Math.abs(all[0]);
+                    const p1 = rotateLocalPoint(all[1], -all[2], all[5] || 0);
+                    const p2 = rotateLocalPoint(all[3], -all[4], all[5] || 0);
+                    const points = stadiumBuffer(p1.x, p1.y, p2.x, p2.y, diam / 2);
+                    const bounds = localBounds(points);
+                    apertures[code] = { type: 'POLY', points, w: bounds.width, h: bounds.height };
+                }
+            } else if (type === 'ROTRECT') {
+                if (all.length >= 2) {
+                    const halfW = Math.abs(all[0]) / 2;
+                    const halfH = Math.abs(all[1]) / 2;
+                    const points = rotateLocalPoints([
+                        { x: -halfW, y: -halfH },
+                        { x:  halfW, y: -halfH },
+                        { x:  halfW, y:  halfH },
+                        { x: -halfW, y:  halfH }
+                    ], all[2] || 0);
+                    const bounds = localBounds(points);
+                    apertures[code] = { type: 'POLY', points, w: bounds.width, h: bounds.height };
+                }
+            } else if (macroPolys[type]) {
+                const points = rotateLocalPoints(macroPolys[type].points, all[0] || 0);
+                const bounds = localBounds(points);
+                apertures[code] = { type: 'POLY', points, w: bounds.width, h: bounds.height };
             } else {
                 // Generic macro: treat first value as a radius/size, rest as alternating x/y coords.
                 // Compute bounding box to get a representative w × h.
@@ -2006,7 +2105,7 @@
                         const h = Math.max(...ys) - Math.min(...ys) + 2 * r;
                         if (w > 0 && h > 0) apertures[code] = { type: 'R', w, h };
                     }
-                } else {
+                } else if (type.length === 1) {
                     const pos = all.filter(n => n > 0);
                     if (pos.length >= 2) apertures[code] = { type: 'R', w: pos[0], h: pos[1] };
                     else if (pos.length === 1) apertures[code] = { type: 'C', w: pos[0] };
@@ -2019,6 +2118,7 @@
         let curAp = null;
         let inRegion = false;
         let regionPts = [];
+        let interpMode = 1; // 1=linear, 2=CW arc (G02), 3=CCW arc (G03)
 
         const stripped = content.replace(/%[^%]*%/g, '');
         const commands = stripped.split('*').map(s => s.trim()).filter(Boolean);
@@ -2026,6 +2126,9 @@
         for (const cmd of commands) {
             if (/^G0*4/.test(cmd)) continue;
             if (/^M0*2$/.test(cmd)) break;
+            if (/^G0*1$/.test(cmd)) { interpMode = 1; continue; }
+            if (/^G0*2$/.test(cmd)) { interpMode = 2; continue; }
+            if (/^G0*3$/.test(cmd)) { interpMode = 3; continue; }
 
             if (/^G0*36$/.test(cmd)) {
                 inRegion = true;
@@ -2047,12 +2150,15 @@
                 continue;
             }
 
-            const coordMatch = cmd.match(/^(?:G0*[123])?(?:X(-?\d+))?(?:Y(-?\d+))?(?:I(-?\d+))?(?:J(-?\d+))?D0*(\d+)$/);
+            const coordMatch = cmd.match(/^(?:G0*([123]))?(?:X(-?\d+))?(?:Y(-?\d+))?(?:I(-?\d+))?(?:J(-?\d+))?D0*(\d+)$/);
             if (!coordMatch) continue;
 
-            const nx = coordMatch[1] !== undefined ? toVal(coordMatch[1], xDec) : curX;
-            const ny = coordMatch[2] !== undefined ? -toVal(coordMatch[2], yDec) : curY;
-            const dCode = parseInt(coordMatch[5]);
+            if (coordMatch[1]) interpMode = parseInt(coordMatch[1]);
+            const nx = coordMatch[2] !== undefined ? toVal(coordMatch[2], xDec) : curX;
+            const ny = coordMatch[3] !== undefined ? -toVal(coordMatch[3], yDec) : curY;
+            const iVal = coordMatch[4] !== undefined ? toVal(coordMatch[4], xDec) : 0;
+            const jVal = coordMatch[5] !== undefined ? toVal(coordMatch[5], yDec) : 0;
+            const dCode = parseInt(coordMatch[6]);
 
             if (dCode >= 10) { curAp = apertures[dCode] || null; continue; }
 
@@ -2063,14 +2169,23 @@
                     regionPts = [{ x: nx, y: ny }];
                 } else if (dCode === 1) {
                     if (!regionPts.length) regionPts.push({ x: curX, y: curY });
-                    regionPts.push({ x: nx, y: ny });
+                    if (interpMode === 1) {
+                        regionPts.push({ x: nx, y: ny });
+                    } else {
+                        const arcSegs = approximateArcStrokeSegments(curX, curY, nx, ny, iVal, jVal, interpMode);
+                        for (const seg of arcSegs) regionPts.push({ x: seg.x2, y: seg.y2 });
+                    }
                 }
             } else {
                 if (dCode === 2) {
                     // pen up
                 } else if (dCode === 1) {
                     if (curAp && (Math.abs(nx - curX) > 0.0001 || Math.abs(ny - curY) > 0.0001)) {
-                        segments.push({ x1: curX, y1: curY, x2: nx, y2: ny, r: (curAp.w || 0) / 2 });
+                        if (interpMode === 1) {
+                            segments.push({ x1: curX, y1: curY, x2: nx, y2: ny, r: (curAp.w || 0) / 2 });
+                        } else {
+                            segments.push(...approximateArcStrokeSegments(curX, curY, nx, ny, iVal, jVal, interpMode, (curAp.w || 0) / 2));
+                        }
                     }
                 } else if (dCode === 3) {
                     if (curAp) flashes.push({ x: nx, y: ny, ap: { ...curAp } });
@@ -2369,6 +2484,9 @@ function stadiumBuffer(x1, y1, x2, y2, d) {
     return pts;
 }
 function flashBuffer(cx, cy, ap, offset) {
+    if (ap.type === 'POLY') {
+        return ap.points.map(function(p) { return { x: cx + p.x, y: cy + p.y }; });
+    }
     var hw = ap.w/2+offset, hh = (ap.h||ap.w)/2+offset;
     if (ap.type === 'C') return circlePoints(cx, cy, ap.w/2+offset, 24);
     if (ap.type === 'O') {
@@ -2542,6 +2660,9 @@ self.onmessage = function(e) {
     // Generate pad polygon for a flash aperture.  offset=0 returns the bare shape.
     // ap = {type:'C'|'R'|'O', w, h}
     function flashBuffer(cx, cy, ap, offset) {
+        if (ap.type === 'POLY') {
+            return ap.points.map(p => ({ x: cx + p.x, y: cy + p.y }));
+        }
         const hw = ap.w / 2 + offset;
         const hh = (ap.h || ap.w) / 2 + offset;
         if (ap.type === 'C') return circlePoints(cx, cy, ap.w / 2 + offset, 24);
