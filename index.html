@@ -996,7 +996,7 @@
                         </div>
                         <div class="preview-legend">
                             <div class="legend-chip"><span class="legend-swatch" style="color:#ffb14a;background:#ffb14a"></span>Copper</div>
-                            <div class="legend-chip"><span class="legend-swatch" style="color:#29e5a3;background:#29e5a3"></span>Isolation</div>
+                            <div class="legend-chip"><span class="legend-swatch" style="color:#ff5d61;background:#ff5d61"></span>Isolation</div>
                             <div class="legend-chip"><span class="legend-swatch" style="color:#7f8ea3;background:#7f8ea3"></span>Board</div>
                             <div class="legend-chip"><span class="legend-swatch" style="color:#74b4ff;background:#74b4ff"></span>Edge Cut</div>
                             <div class="legend-chip"><span class="legend-swatch" style="color:#d9a6ff;background:#d9a6ff"></span>Drill</div>
@@ -1859,6 +1859,31 @@ function flashBuffer(cx, cy, ap, offset) {
     }
     return [{x:cx-hw,y:cy-hh},{x:cx+hw,y:cy-hh},{x:cx+hw,y:cy+hh},{x:cx-hw,y:cy+hh}];
 }
+function pointToSegmentDistanceSqInt(p, a, b) {
+    var dx = b.X - a.X, dy = b.Y - a.Y;
+    var len2 = dx*dx + dy*dy;
+    if (len2 < 1e-9) {
+        var qx = p.X - a.X, qy = p.Y - a.Y;
+        return qx*qx + qy*qy;
+    }
+    var t = ((p.X - a.X) * dx + (p.Y - a.Y) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    var px = a.X + t * dx, py = a.Y + t * dy;
+    var ox = p.X - px, oy = p.Y - py;
+    return ox*ox + oy*oy;
+}
+function pathTouchesBoard(poly, boardPath, tol) {
+    var tolSq = tol * tol;
+    for (var i = 0; i < poly.length; i++) {
+        var p = poly[i];
+        for (var j = 0; j < boardPath.length; j++) {
+            var a = boardPath[j];
+            var b = boardPath[(j + 1) % boardPath.length];
+            if (pointToSegmentDistanceSqInt(p, a, b) <= tolSq) return true;
+        }
+    }
+    return false;
+}
 function buildIsolationToolpaths(segments, flashes, regions, params, boardOutline) {
     var toolDiam=params.toolDiam, isoWidth=params.isoWidth, numPasses=params.numPasses, stepover=params.stepover;
     var copperPolys = [];
@@ -1878,9 +1903,10 @@ function buildIsolationToolpaths(segments, flashes, regions, params, boardOutlin
     clipper.AddPaths(copperPolys, ClipperLib.PolyType.ptSubject, true);
     var united = new ClipperLib.Paths();
     clipper.Execute(ClipperLib.ClipType.ctUnion, united, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
-    var boardClipPath = null, boardArea = 0;
+    var boardClipPath = null, boardArea = 0, usingRealBoard = false;
     if (boardOutline && boardOutline.length >= 3) {
         boardClipPath = toClipper(boardOutline);
+        usingRealBoard = true;
     } else {
         var margin = CLIPPER_SCALE, minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
         for (var i=0;i<united.length;i++) for (var j=0;j<united[i].length;j++) {
@@ -1906,9 +1932,11 @@ function buildIsolationToolpaths(segments, flashes, regions, params, boardOutlin
         var freeArea = new ClipperLib.Paths();
         dc.Execute(ClipperLib.ClipType.ctDifference, freeArea, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
         var added = 0;
+        var boardTouchTol = Math.max(2, Math.round(0.002 * CLIPPER_SCALE));
         for (var k=0;k<freeArea.length;k++) {
             var cpoly=freeArea[k]; if (cpoly.length<3) continue;
             var a=Math.abs(ClipperLib.Clipper.Area(cpoly)); if (a>0.5*boardArea) continue;
+            if (usingRealBoard && pathTouchesBoard(cpoly, boardClipPath, boardTouchTol)) continue;
             paths.push(fromClipper(cpoly)); added++;
         }
         if (added===0) break;
@@ -2018,6 +2046,36 @@ self.onmessage = function(e) {
         ];
     }
 
+    function pointToSegmentDistanceSqClipper(p, a, b) {
+        const dx = b.X - a.X;
+        const dy = b.Y - a.Y;
+        const len2 = dx * dx + dy * dy;
+        if (len2 < 1e-9) {
+            const qx = p.X - a.X;
+            const qy = p.Y - a.Y;
+            return qx * qx + qy * qy;
+        }
+        let t = ((p.X - a.X) * dx + (p.Y - a.Y) * dy) / len2;
+        t = Math.max(0, Math.min(1, t));
+        const px = a.X + t * dx;
+        const py = a.Y + t * dy;
+        const ox = p.X - px;
+        const oy = p.Y - py;
+        return ox * ox + oy * oy;
+    }
+
+    function pathTouchesBoardClipper(poly, boardPath, tol) {
+        const tolSq = tol * tol;
+        for (const p of poly) {
+            for (let i = 0; i < boardPath.length; i++) {
+                const a = boardPath[i];
+                const b = boardPath[(i + 1) % boardPath.length];
+                if (pointToSegmentDistanceSqClipper(p, a, b) <= tolSq) return true;
+            }
+        }
+        return false;
+    }
+
     // Build isolation toolpaths using Clipper for correct polygon union + offset.
     //
     // The algorithm matches pcb2gcode's approach (bg::buffer / ClipperOffset):
@@ -2092,8 +2150,10 @@ self.onmessage = function(e) {
         // Difference algorithm works even without edge cuts.
         let boardClipPath = null;
         let boardArea = 0;
+        let usingRealBoard = false;
         if (typeof outerContour !== 'undefined' && outerContour && outerContour.length >= 3) {
             boardClipPath = toClipper(outerContour);
+            usingRealBoard = true;
         } else {
             // Derive a synthetic boundary from the bounding box of all copper polygons.
             const margin = 1.0 * CLIPPER_SCALE; // 1 mm margin outside copper extent
@@ -2143,12 +2203,14 @@ self.onmessage = function(e) {
             );
 
             let added = 0;
+            const boardTouchTol = Math.max(2, Math.round(0.002 * CLIPPER_SCALE));
             for (const cpoly of freeArea) {
                 if (cpoly.length < 3) continue;
                 // Skip the board/bbox outline: the largest outer polygon whose area is close
                 // to the full boundary area.  Everything smaller is a genuine mill path.
                 const a = Math.abs(ClipperLib.Clipper.Area(cpoly));
                 if (a > 0.5 * boardArea) continue;
+                if (usingRealBoard && pathTouchesBoardClipper(cpoly, boardClipPath, boardTouchTol)) continue;
                 paths.push(fromClipper(cpoly));
                 added++;
             }
@@ -2327,7 +2389,7 @@ self.onmessage = function(e) {
             const angle    = parseFloat(document.getElementById('vbitAngle').value) || 30;
             const depth    = Math.abs(parseFloat(document.getElementById('isoDepth').value) || 0.05);
             const cutWidth = tipDiam + 2 * depth * Math.tan((angle / 2) * (Math.PI / 180));
-            ctx.strokeStyle = 'rgba(41, 229, 163, 0.82)';
+            ctx.strokeStyle = 'rgba(255, 93, 97, 0.84)';
             ctx.lineWidth   = cutWidth;  // world-space width = actual cut width at this depth
             ctx.lineCap     = 'round';
             ctx.lineJoin    = 'round';
@@ -2338,10 +2400,10 @@ self.onmessage = function(e) {
                 for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
                 ctx.closePath();
                 ctx.stroke();
-                ctx.strokeStyle = 'rgba(181, 255, 228, 0.25)';
+                ctx.strokeStyle = 'rgba(255, 179, 182, 0.28)';
                 ctx.lineWidth = Math.max(cutWidth * 0.22, 0.02);
                 ctx.stroke();
-                ctx.strokeStyle = 'rgba(41, 229, 163, 0.82)';
+                ctx.strokeStyle = 'rgba(255, 93, 97, 0.84)';
                 ctx.lineWidth = cutWidth;
             }
             ctx.lineCap   = 'butt';
