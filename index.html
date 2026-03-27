@@ -1111,9 +1111,9 @@
                         <canvas id="preview"></canvas>
                         <div class="preview-hint" id="previewHint">Scroll to zoom · Drag to pan</div>
                         <div class="tab-hint" id="tabHint">Click on the red toolpath to place a tab · click the button again to exit</div>
-                        <div class="tab-hint" id="vcutSelectHint" style="background:rgba(0,212,212,0.1);border-color:rgba(0,212,212,0.3);color:#00d4d4">Click a line to select/deselect it · click the button again to exit</div>
-                        <div class="tab-hint" id="isoSelectHint" style="background:rgba(255,93,97,0.1);border-color:rgba(255,93,97,0.28);color:#ff8f92">Click a path to select/deselect it · click the button again to exit</div>
-                        <div class="tab-hint" id="edgeSelectHint" style="background:rgba(116,180,255,0.1);border-color:rgba(116,180,255,0.28);color:#74b4ff">Click a contour to select/deselect it · click the button again to exit</div>
+                        <div class="tab-hint" id="vcutSelectHint" style="background:rgba(0,212,212,0.1);border-color:rgba(0,212,212,0.3);color:#00d4d4">Click a line or drag a box to select/deselect · click the button again to exit</div>
+                        <div class="tab-hint" id="isoSelectHint" style="background:rgba(255,93,97,0.1);border-color:rgba(255,93,97,0.28);color:#ff8f92">Click a path or drag a box to select/deselect · click the button again to exit</div>
+                        <div class="tab-hint" id="edgeSelectHint" style="background:rgba(116,180,255,0.1);border-color:rgba(116,180,255,0.28);color:#74b4ff">Click a contour or drag a box to select/deselect · click the button again to exit</div>
                     </div>
                 </div>
             </section>
@@ -1167,6 +1167,7 @@
     let isPanning  = false;
     let panLastX   = 0;
     let panLastY   = 0;
+    let selectionDrag = null; // { layer, startX, startY, curX, curY, moved }
 
     // =========================================================
     // === DOM REFS
@@ -2186,6 +2187,94 @@
         return nearestClosedPathIndex(edgeContourToolpaths, wx, wy, threshold);
     }
 
+    function pointInRect(px, py, rect) {
+        return px >= rect.minX && px <= rect.maxX && py >= rect.minY && py <= rect.maxY;
+    }
+
+    function orient(ax, ay, bx, by, cx, cy) {
+        const v = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+        if (Math.abs(v) < 1e-9) return 0;
+        return v > 0 ? 1 : -1;
+    }
+
+    function onSegment(ax, ay, bx, by, px, py) {
+        return px >= Math.min(ax, bx) - 1e-9 && px <= Math.max(ax, bx) + 1e-9 &&
+               py >= Math.min(ay, by) - 1e-9 && py <= Math.max(ay, by) + 1e-9;
+    }
+
+    function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+        const o1 = orient(ax, ay, bx, by, cx, cy);
+        const o2 = orient(ax, ay, bx, by, dx, dy);
+        const o3 = orient(cx, cy, dx, dy, ax, ay);
+        const o4 = orient(cx, cy, dx, dy, bx, by);
+        if (o1 !== o2 && o3 !== o4) return true;
+        if (o1 === 0 && onSegment(ax, ay, bx, by, cx, cy)) return true;
+        if (o2 === 0 && onSegment(ax, ay, bx, by, dx, dy)) return true;
+        if (o3 === 0 && onSegment(cx, cy, dx, dy, ax, ay)) return true;
+        if (o4 === 0 && onSegment(cx, cy, dx, dy, bx, by)) return true;
+        return false;
+    }
+
+    function segmentIntersectsRect(x1, y1, x2, y2, rect) {
+        const segMinX = Math.min(x1, x2), segMaxX = Math.max(x1, x2);
+        const segMinY = Math.min(y1, y2), segMaxY = Math.max(y1, y2);
+        if (segMaxX < rect.minX || segMinX > rect.maxX || segMaxY < rect.minY || segMinY > rect.maxY) return false;
+        if (pointInRect(x1, y1, rect) || pointInRect(x2, y2, rect)) return true;
+        return segmentsIntersect(x1, y1, x2, y2, rect.minX, rect.minY, rect.maxX, rect.minY) ||
+               segmentsIntersect(x1, y1, x2, y2, rect.maxX, rect.minY, rect.maxX, rect.maxY) ||
+               segmentsIntersect(x1, y1, x2, y2, rect.maxX, rect.maxY, rect.minX, rect.maxY) ||
+               segmentsIntersect(x1, y1, x2, y2, rect.minX, rect.maxY, rect.minX, rect.minY);
+    }
+
+    function rectFromCanvasPoints(x1, y1, x2, y2) {
+        const a = canvasToWorld(x1, y1);
+        const b = canvasToWorld(x2, y2);
+        return {
+            minX: Math.min(a.x, b.x),
+            minY: Math.min(a.y, b.y),
+            maxX: Math.max(a.x, b.x),
+            maxY: Math.max(a.y, b.y),
+        };
+    }
+
+    function collectVcutsInRect(rect) {
+        const hit = [];
+        for (let i = 0; i < vcutSegments.length; i++) {
+            const s = vcutSegments[i];
+            if (segmentIntersectsRect(s.x1, s.y1, s.x2, s.y2, rect)) hit.push(i);
+        }
+        return hit;
+    }
+
+    function collectClosedPathsInRect(paths, rect) {
+        const hit = [];
+        for (let i = 0; i < paths.length; i++) {
+            const path = paths[i];
+            if (!path || path.length < 2) continue;
+            let intersects = false;
+            for (let j = 0; j < path.length; j++) {
+                const a = path[j];
+                const b = path[(j + 1) % path.length];
+                if (segmentIntersectsRect(a.x, a.y, b.x, b.y, rect)) {
+                    intersects = true;
+                    break;
+                }
+            }
+            if (intersects) hit.push(i);
+        }
+        return hit;
+    }
+
+    function applyBulkSelection(targetSet, indices) {
+        if (!indices.length) return false;
+        const shouldSelect = indices.some(i => !targetSet.has(i));
+        for (const i of indices) {
+            if (shouldSelect) targetSet.add(i);
+            else targetSet.delete(i);
+        }
+        return true;
+    }
+
     // Pure version of pointAtLength that works on any path + arc-lengths array (no globals).
     function pointAtLengthOnPath(len, path, lens) {
         const total = lens[lens.length - 1];
@@ -2988,6 +3077,24 @@ self.onmessage = function(e) {
         });
 
         ctx.restore();
+
+        if (selectionDrag && selectionDrag.moved) {
+            const x = Math.min(selectionDrag.startX, selectionDrag.curX);
+            const y = Math.min(selectionDrag.startY, selectionDrag.curY);
+            const w = Math.abs(selectionDrag.curX - selectionDrag.startX);
+            const h = Math.abs(selectionDrag.curY - selectionDrag.startY);
+            const color = selectionDrag.layer === 'vcut' ? '#00d4d4'
+                : selectionDrag.layer === 'iso' ? '#ff5d61'
+                : '#74b4ff';
+            ctx.save();
+            ctx.fillStyle = `${color}22`;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([6, 4]);
+            ctx.fillRect(x, y, w, h);
+            ctx.strokeRect(x, y, w, h);
+            ctx.restore();
+        }
 
         // Board dimensions overlay (fixed position)
         if (boardBounds) {
@@ -4351,6 +4458,13 @@ self.onmessage = function(e) {
     // =========================================================
 
     function initCanvasInteraction() {
+        function activeSelectionLayer() {
+            if (vcutSelectMode) return 'vcut';
+            if (isoSelectMode) return 'iso';
+            if (edgeSelectMode) return 'edge';
+            return null;
+        }
+
         // Zoom with scroll wheel
         canvas.addEventListener('wheel', e => {
             e.preventDefault();
@@ -4367,10 +4481,12 @@ self.onmessage = function(e) {
         // Click — place tab / toggle selections if in active interaction mode, otherwise start pan
         canvas.addEventListener('mousedown', e => {
             if (e.button !== 0) return;
+            const rect = canvas.getBoundingClientRect();
+            const localX = e.clientX - rect.left;
+            const localY = e.clientY - rect.top;
 
             if (tabModeActive && toolpath) {
-                const rect = canvas.getBoundingClientRect();
-                const { x, y } = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
+                const { x, y } = canvasToWorld(localX, localY);
                 const t = nearestTabT(x, y);
                 const width = parseFloat(document.getElementById('tabWidth').value) || 3.0;
                 tabs.push({ t, width });
@@ -4380,48 +4496,9 @@ self.onmessage = function(e) {
                 return;
             }
 
-            if (vcutSelectMode && vcutSegments.length) {
-                const rect = canvas.getBoundingClientRect();
-                const { x, y } = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
-                // Threshold: 5px in world coords — adapts to zoom level
-                const threshold = 5 / viewScale;
-                const idx = nearestVCutSegment(x, y, threshold);
-                if (idx >= 0) {
-                    if (vcutSelectedSet.has(idx)) vcutSelectedSet.delete(idx);
-                    else vcutSelectedSet.add(idx);
-                    updateVCutSelectedDisplay();
-                    updateRuntimeEstimate();
-                    drawPreview();
-                }
-                return;
-            }
-
-            if (isoSelectMode && copperToolpaths.length) {
-                const rect = canvas.getBoundingClientRect();
-                const { x, y } = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
-                const idx = nearestIsoPath(x, y, 5 / viewScale);
-                if (idx >= 0) {
-                    if (isoSelectedSet.has(idx)) isoSelectedSet.delete(idx);
-                    else isoSelectedSet.add(idx);
-                    updateIsoSelectedDisplay();
-                    updateRuntimeEstimate();
-                    drawPreview();
-                }
-                return;
-            }
-
-            if (edgeSelectMode && edgeContourToolpaths.length) {
-                const rect = canvas.getBoundingClientRect();
-                const { x, y } = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
-                const idx = nearestEdgeContour(x, y, 5 / viewScale);
-                if (idx >= 0) {
-                    if (edgeSelectedSet.has(idx)) edgeSelectedSet.delete(idx);
-                    else edgeSelectedSet.add(idx);
-                    if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
-                    updateEdgeSelectedDisplay();
-                    updateRuntimeEstimate();
-                    drawPreview();
-                }
+            const activeLayer = activeSelectionLayer();
+            if (activeLayer) {
+                selectionDrag = { layer: activeLayer, startX: localX, startY: localY, curX: localX, curY: localY, moved: false };
                 return;
             }
 
@@ -4432,6 +4509,16 @@ self.onmessage = function(e) {
         });
 
         window.addEventListener('mousemove', e => {
+            if (selectionDrag) {
+                const rect = canvas.getBoundingClientRect();
+                selectionDrag.curX = e.clientX - rect.left;
+                selectionDrag.curY = e.clientY - rect.top;
+                const dx = selectionDrag.curX - selectionDrag.startX;
+                const dy = selectionDrag.curY - selectionDrag.startY;
+                selectionDrag.moved = selectionDrag.moved || Math.hypot(dx, dy) > 6;
+                scheduleRedraw();
+                return;
+            }
             if (!isPanning) return;
             viewOffX += e.clientX - panLastX;
             viewOffY += e.clientY - panLastY;
@@ -4440,7 +4527,69 @@ self.onmessage = function(e) {
             scheduleRedraw();
         });
 
-        window.addEventListener('mouseup', () => {
+        window.addEventListener('mouseup', e => {
+            if (selectionDrag) {
+                const drag = selectionDrag;
+                selectionDrag = null;
+                const rect = canvas.getBoundingClientRect();
+                const localX = e.clientX - rect.left;
+                const localY = e.clientY - rect.top;
+
+                if (drag.moved) {
+                    const worldRect = rectFromCanvasPoints(drag.startX, drag.startY, localX, localY);
+                    let changed = false;
+                    if (drag.layer === 'vcut') {
+                        changed = applyBulkSelection(vcutSelectedSet, collectVcutsInRect(worldRect));
+                        if (changed) updateVCutSelectedDisplay();
+                    } else if (drag.layer === 'iso') {
+                        changed = applyBulkSelection(isoSelectedSet, collectClosedPathsInRect(copperToolpaths, worldRect));
+                        if (changed) updateIsoSelectedDisplay();
+                    } else if (drag.layer === 'edge') {
+                        changed = applyBulkSelection(edgeSelectedSet, collectClosedPathsInRect(edgeContourToolpaths, worldRect));
+                        if (changed) {
+                            if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
+                            updateEdgeSelectedDisplay();
+                        }
+                    }
+                    if (changed) updateRuntimeEstimate();
+                    drawPreview();
+                    return;
+                }
+
+                const { x, y } = canvasToWorld(localX, localY);
+                const threshold = 5 / viewScale;
+                let changed = false;
+                if (drag.layer === 'vcut' && vcutSegments.length) {
+                    const idx = nearestVCutSegment(x, y, threshold);
+                    if (idx >= 0) {
+                        if (vcutSelectedSet.has(idx)) vcutSelectedSet.delete(idx);
+                        else vcutSelectedSet.add(idx);
+                        updateVCutSelectedDisplay();
+                        changed = true;
+                    }
+                } else if (drag.layer === 'iso' && copperToolpaths.length) {
+                    const idx = nearestIsoPath(x, y, threshold);
+                    if (idx >= 0) {
+                        if (isoSelectedSet.has(idx)) isoSelectedSet.delete(idx);
+                        else isoSelectedSet.add(idx);
+                        updateIsoSelectedDisplay();
+                        changed = true;
+                    }
+                } else if (drag.layer === 'edge' && edgeContourToolpaths.length) {
+                    const idx = nearestEdgeContour(x, y, threshold);
+                    if (idx >= 0) {
+                        if (edgeSelectedSet.has(idx)) edgeSelectedSet.delete(idx);
+                        else edgeSelectedSet.add(idx);
+                        if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
+                        updateEdgeSelectedDisplay();
+                        changed = true;
+                    }
+                }
+                if (changed) updateRuntimeEstimate();
+                drawPreview();
+                return;
+            }
+
             isPanning = false;
             canvas.classList.remove('panning');
         });
