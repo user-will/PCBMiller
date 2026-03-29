@@ -1013,6 +1013,13 @@
                     <span class="unit">mm/min</span>
                 </div>
             </div>
+            <div class="input-group hidden" id="drillSideGroup">
+                <label class="toggle-label">
+                    <input type="checkbox" id="drillOnBackSide">
+                    <span>Drill on Side 2 after flip</span>
+                </label>
+                <div class="hint">Use this for through-hole boards where the drilling pass should run after flipping onto the alignment pins.</div>
+            </div>
             <hr class="section-divider">
         </div>
 
@@ -1331,6 +1338,8 @@
     const clearDrillBtn     = document.getElementById('clearDrillBtn');
     const isolationSection  = document.getElementById('isolationSection');
     const drillSection      = document.getElementById('drillSection');
+    const drillSideGroup    = document.getElementById('drillSideGroup');
+    const drillOnBackSideEl = document.getElementById('drillOnBackSide');
     const outputModeSection = document.getElementById('outputModeSection');
     const modeCombined      = document.getElementById('modeCombined');
     const downloadTracesBtn = document.getElementById('downloadTracesBtn');
@@ -1462,6 +1471,7 @@
         const showAlignPins = twoLayerMode && hasBackCopper;
         alignPinsSection ? alignPinsSection.classList.toggle('hidden', !showAlignPins) : null;
         sideViewSection  ? sideViewSection.classList.toggle('hidden', !twoLayerMode) : null;
+        drillSideGroup   ? drillSideGroup.classList.toggle('hidden', !twoLayerMode) : null;
 
         // Legend chips for two-layer
         const legendBackCu   = document.getElementById('legendBackCu');
@@ -3306,12 +3316,25 @@ self.onmessage = function(e) {
             }
         });
 
+        const previewMirrorDims = boardBounds || copperBounds || backCopperBounds;
+        const previewMirrorAxis = previewMirrorDims ? getBackMirrorAxisWorld(previewMirrorDims) : null;
+        const withBackPreviewMirror = draw => {
+            if (!(twoLayerMode && previewSide === 'back' && previewMirrorAxis != null)) {
+                draw();
+                return;
+            }
+            ctx.save();
+            ctx.transform(-1, 0, 0, 1, previewMirrorAxis, 0);
+            draw();
+            ctx.restore();
+        };
+
         // Back copper (mirrored for display)
         if (twoLayerMode && previewSide !== 'front') {
-            const dims = boardBounds || copperBounds || backCopperBounds;
+            const dims = previewMirrorDims;
             if (dims && hasBackCopperLoaded()) {
                 ctx.save();
-                ctx.transform(-1, 0, 0, 1, dims.minX + dims.maxX, 0);
+                ctx.transform(-1, 0, 0, 1, previewMirrorAxis, 0);
                 ctx.fillStyle = 'rgba(91,180,255,0.7)';
                 for (const region of backCopperRegions) {
                     if (region.length < 3) continue;
@@ -3351,7 +3374,7 @@ self.onmessage = function(e) {
                 const depth    = Math.abs(parseFloat(document.getElementById('isoDepth').value) || 0.05);
                 const cutWidth = tipDiam + 2 * depth * Math.tan((angle / 2) * (Math.PI / 180));
                 ctx.save();
-                ctx.transform(-1, 0, 0, 1, dims.minX + dims.maxX, 0);
+                ctx.transform(-1, 0, 0, 1, previewMirrorAxis, 0);
                 ctx.lineCap  = 'round';
                 ctx.lineJoin = 'round';
                 for (const path of backCopperToolpaths) {
@@ -3377,29 +3400,33 @@ self.onmessage = function(e) {
             ctx.fillStyle   = 'rgba(227,255,106,0.12)';
             ctx.lineWidth   = 0.07;
             ctx.lineCap     = 'round';
-            for (const pin of alignmentPins) {
-                ctx.beginPath();
-                ctx.arc(pin.x, pin.y, pinR, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                ctx.beginPath();
-                ctx.moveTo(pin.x - pinR * 1.6, pin.y); ctx.lineTo(pin.x + pinR * 1.6, pin.y);
-                ctx.moveTo(pin.x, pin.y - pinR * 1.6); ctx.lineTo(pin.x, pin.y + pinR * 1.6);
-                ctx.stroke();
-            }
+            withBackPreviewMirror(() => {
+                for (const pin of alignmentPins) {
+                    ctx.beginPath();
+                    ctx.arc(pin.x, pin.y, pinR, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(pin.x - pinR * 1.6, pin.y); ctx.lineTo(pin.x + pinR * 1.6, pin.y);
+                    ctx.moveTo(pin.x, pin.y - pinR * 1.6); ctx.lineTo(pin.x, pin.y + pinR * 1.6);
+                    ctx.stroke();
+                }
+            });
             ctx.lineCap = 'butt';
         }
 
         withLayerFocus('edge', () => {
-            for (let i = 0; i < parsedContours.length; i++) {
-                const contour = parsedContours[i];
-                const isSelected = edgeSelectedSet.has(i);
-                if (!isSelected && !edgeSelectMode) continue;
-                ctx.save();
-                ctx.setLineDash([1.4 / viewScale, 1.4 / viewScale]);
-                drawPolyline(contour, isSelected ? 'rgba(184, 198, 214, 0.98)' : 'rgba(184, 198, 214, 0.18)', 1.2);
-                ctx.restore();
-            }
+            withBackPreviewMirror(() => {
+                for (let i = 0; i < parsedContours.length; i++) {
+                    const contour = parsedContours[i];
+                    const isSelected = edgeSelectedSet.has(i);
+                    if (!isSelected && !edgeSelectMode) continue;
+                    ctx.save();
+                    ctx.setLineDash([1.4 / viewScale, 1.4 / viewScale]);
+                    drawPolyline(contour, isSelected ? 'rgba(184, 198, 214, 0.98)' : 'rgba(184, 198, 214, 0.18)', 1.2);
+                    ctx.restore();
+                }
+            });
         });
 
         withLayerFocus('drill', () => {
@@ -3407,16 +3434,18 @@ self.onmessage = function(e) {
             ctx.strokeStyle = '#d9a6ff';
             ctx.lineWidth   = 0.06;
             ctx.lineCap     = 'round';
-            for (const h of drillHoles) {
-                const r = h.r > 0 ? h.r : 0.4;
-                ctx.beginPath();
-                ctx.arc(h.x, h.y, r, 0, Math.PI * 2);
-                ctx.stroke();
-                ctx.beginPath();
-                ctx.moveTo(h.x - r, h.y); ctx.lineTo(h.x + r, h.y);
-                ctx.moveTo(h.x, h.y - r); ctx.lineTo(h.x, h.y + r);
-                ctx.stroke();
-            }
+            withBackPreviewMirror(() => {
+                for (const h of drillHoles) {
+                    const r = h.r > 0 ? h.r : 0.4;
+                    ctx.beginPath();
+                    ctx.arc(h.x, h.y, r, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(h.x - r, h.y); ctx.lineTo(h.x + r, h.y);
+                    ctx.moveTo(h.x, h.y - r); ctx.lineTo(h.x, h.y + r);
+                    ctx.stroke();
+                }
+            });
             ctx.lineCap = 'butt';
         });
 
@@ -3424,70 +3453,76 @@ self.onmessage = function(e) {
             if (!vcutSegments.length) return;
             ctx.lineWidth = 1.5 / viewScale;
             ctx.lineCap   = 'round';
-            for (let i = 0; i < vcutSegments.length; i++) {
-                const seg = vcutSegments[i];
-                const isSelected = vcutSelectedSet.has(i);
-                if (!isSelected && !vcutSelectMode) continue;
-                ctx.strokeStyle = isSelected ? '#00d4d4' : 'rgba(0,180,180,0.18)';
-                ctx.beginPath();
-                ctx.moveTo(seg.x1, seg.y1);
-                ctx.lineTo(seg.x2, seg.y2);
-                ctx.stroke();
-            }
+            withBackPreviewMirror(() => {
+                for (let i = 0; i < vcutSegments.length; i++) {
+                    const seg = vcutSegments[i];
+                    const isSelected = vcutSelectedSet.has(i);
+                    if (!isSelected && !vcutSelectMode) continue;
+                    ctx.strokeStyle = isSelected ? '#00d4d4' : 'rgba(0,180,180,0.18)';
+                    ctx.beginPath();
+                    ctx.moveTo(seg.x1, seg.y1);
+                    ctx.lineTo(seg.x2, seg.y2);
+                    ctx.stroke();
+                }
+            });
             ctx.lineCap = 'butt';
         });
 
         withLayerFocus('edge', () => {
             const outerContourIndex = getOuterContourIndex();
-            if (depanelMode && depanelToolpaths.length) {
-                for (const tp of depanelToolpaths) {
-                    drawPolyline(tp, '#74b4ff', 2.6);
+            withBackPreviewMirror(() => {
+                if (depanelMode && depanelToolpaths.length) {
+                    for (const tp of depanelToolpaths) {
+                        drawPolyline(tp, '#74b4ff', 2.6);
+                    }
+                    if (depanelCutOuter && toolpath && outerContourIndex >= 0 && edgeSelectedSet.has(outerContourIndex)) {
+                        drawPolyline(toolpath, 'rgba(116,180,255,0.5)', 2.0);
+                    }
+                } else if (edgeContourToolpaths.length) {
+                    for (let i = 0; i < edgeContourToolpaths.length; i++) {
+                        const tp = edgeContourToolpaths[i];
+                        const isSelected = edgeSelectedSet.has(i);
+                        if (!isSelected && !edgeSelectMode) continue;
+                        drawPolyline(tp, isSelected ? '#74b4ff' : 'rgba(116,180,255,0.18)', 2.6);
+                    }
                 }
-                if (depanelCutOuter && toolpath && outerContourIndex >= 0 && edgeSelectedSet.has(outerContourIndex)) {
-                    drawPolyline(toolpath, 'rgba(116,180,255,0.5)', 2.0);
-                }
-            } else if (edgeContourToolpaths.length) {
-                for (let i = 0; i < edgeContourToolpaths.length; i++) {
-                    const tp = edgeContourToolpaths[i];
-                    const isSelected = edgeSelectedSet.has(i);
-                    if (!isSelected && !edgeSelectMode) continue;
-                    drawPolyline(tp, isSelected ? '#74b4ff' : 'rgba(116,180,255,0.18)', 2.6);
-                }
-            }
+            });
         });
 
         withLayerFocus('edge', () => {
             const outerContourIndex = getOuterContourIndex();
             if (!(toolpath && tabs.length && outerContourIndex >= 0 && edgeSelectedSet.has(outerContourIndex))) return;
-            const total = toolpathLens[toolpathLens.length - 1];
-            for (const tab of tabs) {
-                const halfW = tab.width / 2;
-                const cLen = tab.t * total;
-                const pt = pointAtLength(cLen);
-                const ahead = pointAtLength(cLen + 0.5);
-                const behind = pointAtLength(cLen - 0.5);
-                const tx = ahead.x - behind.x, ty = ahead.y - behind.y;
-                const tl = Math.sqrt(tx * tx + ty * ty);
-                const tnx = tl > 0.001 ? tx / tl : 1;
-                const tny = tl > 0.001 ? ty / tl : 0;
-                const s = pointAtLength(cLen - halfW);
-                const e = pointAtLength(cLen + halfW);
+            withBackPreviewMirror(() => {
+                const total = toolpathLens[toolpathLens.length - 1];
+                for (const tab of tabs) {
+                    const halfW = tab.width / 2;
+                    const cLen = tab.t * total;
+                    const pt = pointAtLength(cLen);
+                    const ahead = pointAtLength(cLen + 0.5);
+                    const behind = pointAtLength(cLen - 0.5);
+                    const tx = ahead.x - behind.x, ty = ahead.y - behind.y;
+                    const tl = Math.sqrt(tx * tx + ty * ty);
+                    const tnx = tl > 0.001 ? tx / tl : 1;
+                    const tny = tl > 0.001 ? ty / tl : 0;
+                    const s = pointAtLength(cLen - halfW);
+                    const e = pointAtLength(cLen + halfW);
 
-                ctx.beginPath();
-                ctx.moveTo(s.x, s.y);
-                ctx.lineTo(e.x, e.y);
-                ctx.strokeStyle = '#e3ff6a';
-                ctx.lineWidth = 4 / viewScale;
-                ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(s.x, s.y);
+                    ctx.lineTo(e.x, e.y);
+                    ctx.strokeStyle = '#e3ff6a';
+                    ctx.lineWidth = 4 / viewScale;
+                    ctx.stroke();
 
-                const tickSize = 2;
-                ctx.beginPath();
-                ctx.moveTo(pt.x - tny * tickSize, pt.y + tnx * tickSize);
-                ctx.lineTo(pt.x + tny * tickSize, pt.y - tnx * tickSize);
-                ctx.strokeStyle = '#e3ff6a';
-                ctx.lineWidth = 1.5 / viewScale;
-                ctx.stroke();
-            }
+                    const tickSize = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(pt.x - tny * tickSize, pt.y + tnx * tickSize);
+                    ctx.lineTo(pt.x + tny * tickSize, pt.y - tnx * tickSize);
+                    ctx.strokeStyle = '#e3ff6a';
+                    ctx.lineWidth = 1.5 / viewScale;
+                    ctx.stroke();
+                }
+            });
         });
 
         ctx.restore();
@@ -3539,11 +3574,24 @@ self.onmessage = function(e) {
         };
     }
 
-    // For back copper G-code: mirror X around the board width.
+    function getBackMirrorAxisWorld(bounds) {
+        if (alignmentPins.length >= 2) return alignmentPins[0].x + alignmentPins[1].x;
+        return bounds.minX + bounds.maxX;
+    }
+
+    function getBackMirrorAxisGcode(bounds) {
+        if (alignmentPins.length >= 2) {
+            return (alignmentPins[0].x - bounds.minX) + (alignmentPins[1].x - bounds.minX);
+        }
+        return bounds.maxX - bounds.minX;
+    }
+
+    // For back-side G-code: mirror X around the alignment-pin axis when available.
     function toGCBack(pt) {
         const bounds = gcBounds || boardBounds || copperBounds;
+        const xFront = pt.x - bounds.minX;
         return {
-            x: bounds.maxX - pt.x,
+            x: getBackMirrorAxisGcode(bounds) - xFront,
             y: bounds.maxY - pt.y
         };
     }
@@ -3812,11 +3860,10 @@ self.onmessage = function(e) {
         return out;
     }
 
-    // Emit G-code lines for all drill holes from an Excellon file.
-    function emitDrillLines(lines, holes, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f) {
+    function emitDrillLinesWithTransform(lines, holes, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f, sectionTitle, projectHole) {
         if (!holes.length) return;
         lines.push('');
-        lines.push('; === DRILLING ===');
+        lines.push(sectionTitle);
 
         // Group holes by diameter, sorted by diameter ascending
         const groups = [];
@@ -3855,7 +3902,7 @@ self.onmessage = function(e) {
                 lines.push(`G0 Z${f(safeZ)}`);
             }
             lines.push(`; --- ${g.diam} mm drill bit (${g.holes.length} hole${g.holes.length > 1 ? 's' : ''}) ---`);
-            const pts = g.holes.map(h => toGC({ x: h.x, y: h.y }));
+            const pts = g.holes.map(projectHole);
             const sorted = sortPointsNearestNeighbor(pts, 0, 0);
             for (const pt of sorted) {
                 lines.push(`G0 X${f(pt.x)} Y${f(pt.y)}  ; position over hole`);
@@ -3863,6 +3910,23 @@ self.onmessage = function(e) {
                 lines.push(`G0 Z${f(safeZ)}  ; retract`);
             }
         }
+    }
+
+    // Emit G-code lines for all drill holes from an Excellon file.
+    function emitDrillLines(lines, holes, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f) {
+        emitDrillLinesWithTransform(
+            lines, holes, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f,
+            '; === DRILLING ===',
+            h => toGC({ x: h.x, y: h.y })
+        );
+    }
+
+    function emitBackDrillLines(lines, holes, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f) {
+        emitDrillLinesWithTransform(
+            lines, holes, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f,
+            '; === DRILLING — BACK SIDE (mirrored X) ===',
+            h => toGCBack({ x: h.x, y: h.y })
+        );
     }
 
     // Emit G-code lines for all isolation toolpaths.
@@ -4253,6 +4317,7 @@ self.onmessage = function(e) {
             drillDepth    = -drillDepthUi;
             drillFeedRate = parseInt(document.getElementById('drillFeedRate').value);
         }
+        const drillOnBackSide = twoLayerMode && !!drillOnBackSideEl?.checked;
 
         // Edge cut params (used for both normal edge cuts and depanelization)
         let cutDepthUi = 0, passDepth = 0.5, feedRate = 300, tabLayers = 1, toolDiam = '?', passes = [];
@@ -4301,7 +4366,10 @@ self.onmessage = function(e) {
         if (hasBackVCuts) emitBackVCutLines(backVcutLines, activeVCuts, vcutDepthVal, safeZ, vcutFeedRate, plungeRate, f);
 
         const drillLines = [];
-        if (hasDrill) emitDrillLines(drillLines, drillHoles, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f);
+        if (hasDrill && !drillOnBackSide) emitDrillLines(drillLines, drillHoles, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f);
+
+        const backDrillLines = [];
+        if (hasDrill && drillOnBackSide) emitBackDrillLines(backDrillLines, drillHoles, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f);
 
         const depanelLines = [];
         if (hasDepanel) {
@@ -4343,7 +4411,7 @@ self.onmessage = function(e) {
             ];
             if (hasIsolation) h.push(`; Isolation routing: ${activeIsolationPaths.length} paths, depth ${isoDepthUi} mm at ${isoFeedRate} mm/min`);
             if (hasVCuts)     h.push(`; V-cut scoring: ${activeVCuts.length} lines, depth ${Math.abs(vcutDepthVal)} mm at ${vcutFeedRate} mm/min`);
-            if (hasDrill)     h.push(`; Drilling: ${drillHoles.length} holes, depth ${drillDepthUi} mm, bits: ${drillBitSizes.join(', ')} mm`);
+            if (hasDrill)     h.push(`; Drilling: ${drillHoles.length} holes, depth ${drillDepthUi} mm, bits: ${drillBitSizes.join(', ')} mm${drillOnBackSide ? ' (Side 2 mirrored)' : ''}`);
             if (hasDepanel)   h.push(`; Depanelization: ${activeDepanelToolpaths.length} sub-boards, depth ${cutDepthUi} mm, feed ${feedRate} mm/min`);
             if (hasEdgeCuts)  h.push(`; Edge cuts: depth ${cutDepthUi} mm, ${passes.length} pass(es), feed ${feedRate} mm/min`);
             return h;
@@ -4406,7 +4474,7 @@ self.onmessage = function(e) {
                 const vBitContent = [...isolationLines, ...vcutLines];
                 sections.push({ content: vBitContent, tool: isoTool });
             }
-            if (hasDrill)   sections.push({ content: drillLines,   tool: drillTool });
+            if (drillLines.length) sections.push({ content: drillLines, tool: drillTool });
             if (hasAlignPins) sections.push({ content: alignPinLines, tool: drillTool });
             if (hasDepanel) sections.push({ content: depanelLines, tool: edgeTool });
             if (hasEdgeCuts) sections.push({ content: edgeLines,   tool: edgeTool });
@@ -4425,7 +4493,14 @@ self.onmessage = function(e) {
                 lines.push(...merged[i].content);
             }
 
-            if ((twoLayerMode && (hasBackIsolation || hasBackVCuts)) || (!twoLayerMode && hasBackVCuts)) {
+            if ((twoLayerMode && (hasBackIsolation || hasBackVCuts || backDrillLines.length)) || (!twoLayerMode && hasBackVCuts)) {
+                const side2Sections = [];
+                if (hasBackIsolation || hasBackVCuts) {
+                    side2Sections.push({ content: [...backIsolationLines, ...backVcutLines], tool: isoTool });
+                }
+                if (backDrillLines.length) {
+                    side2Sections.push({ content: backDrillLines, tool: drillTool });
+                }
                 const flipInstructions = [
                     '',
                     'M5   ; spindle off — SIDE 1 COMPLETE',
@@ -4444,14 +4519,25 @@ self.onmessage = function(e) {
                     ';   6. Press Cycle Start / Resume',
                     '; ================================================================',
                     `M0  ; PAUSE — flip board and re-zero Z, then resume`,
-                    '',
-                    `M3 S${spindleRpm}  ; spindle on`,
                 ];
-                if (spindleDelay > 0) flipInstructions.push(`G4 P${spindleDelay}  ; wait for spindle`);
-                flipInstructions.push(`G0 Z${f(safeZ)}`);
                 lines.push(...flipInstructions);
-                if (hasBackIsolation) lines.push(...backIsolationLines);
-                if (hasBackVCuts)     lines.push(...backVcutLines);
+                if (side2Sections.length) {
+                    const previousTool = merged.length ? merged[merged.length - 1].tool : null;
+                    const firstTool = side2Sections[0].tool;
+                    if (previousTool && previousTool !== firstTool) {
+                        lines.push(...makeToolChange(previousTool, firstTool));
+                    } else {
+                        lines.push('');
+                        lines.push(`M3 S${spindleRpm}  ; spindle on`);
+                        if (spindleDelay > 0) lines.push(`G4 P${spindleDelay}  ; wait for spindle`);
+                        lines.push(`G0 Z${f(safeZ)}`);
+                    }
+                    lines.push(...side2Sections[0].content);
+                    for (let i = 1; i < side2Sections.length; i++) {
+                        lines.push(...makeToolChange(side2Sections[i - 1].tool, side2Sections[i].tool));
+                        lines.push(...side2Sections[i].content);
+                    }
+                }
             }
             lines.push('');
             lines.push('M5   ; spindle off');
@@ -4474,7 +4560,7 @@ self.onmessage = function(e) {
 
             gcodeTraces    = hasIsolation ? buildSectionFile('Isolation Routing', isolationLines) : '';
             gcodeVCuts     = hasVCuts     ? buildSectionFile('V-Cut Scoring',     vcutLines)      : '';
-            gcodeDrill     = hasDrill     ? buildSectionFile('Drilling',           drillLines)     : '';
+            gcodeDrill     = drillLines.length ? buildSectionFile('Drilling', drillLines) : '';
             gcodeDepanel   = hasDepanel   ? buildSectionFile('Depanelization',     depanelLines)   : '';
             gcodeOutline   = hasEdgeCuts  ? buildSectionFile('Board Outline',      edgeLines)      : '';
             gcodeVCutsBack = (!twoLayerMode && hasBackVCuts)
@@ -4485,7 +4571,7 @@ self.onmessage = function(e) {
                 const side1Lines = [];
                 if (hasIsolation || hasVCuts) side1Lines.push(...isolationLines, ...vcutLines);
                 if (hasAlignPins) side1Lines.push(...alignPinLines);
-                if (hasDrill) side1Lines.push(...drillLines);
+                if (drillLines.length) side1Lines.push(...drillLines);
                 if (hasDepanel) side1Lines.push(...depanelLines);
                 if (hasEdgeCuts) side1Lines.push(...edgeLines);
                 gcSide1 = side1Lines.length ? buildSectionFile('Side 1 — Front', side1Lines) : '';
@@ -4500,7 +4586,8 @@ self.onmessage = function(e) {
                 const side2Content = [...side2Header];
                 if (hasBackIsolation) side2Content.push(...backIsolationLines);
                 if (hasBackVCuts)     side2Content.push(...backVcutLines);
-                gcSide2 = (hasBackIsolation || hasBackVCuts)
+                if (backDrillLines.length) side2Content.push(...backDrillLines);
+                gcSide2 = (hasBackIsolation || hasBackVCuts || backDrillLines.length)
                     ? buildSectionFile('Side 2 — Back', side2Content)
                     : '';
             } else {
@@ -4510,13 +4597,19 @@ self.onmessage = function(e) {
             // Textarea shows a combined preview so the user can review all content
             const preview = [];
             let fileNum = 0;
-            const totalFiles = [gcodeTraces, gcodeVCuts, gcodeVCutsBack, gcodeDrill, gcodeDepanel, gcodeOutline].filter(Boolean).length;
-            if (gcodeTraces)    { preview.push(`; ====== FILE ${++fileNum} OF ${totalFiles}: TRACES (Isolation Routing) ======\n`); preview.push(gcodeTraces); }
-            if (gcodeVCuts)     { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: V-CUTS (Front) ======\n`); preview.push(gcodeVCuts); }
-            if (gcodeVCutsBack) { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: V-CUTS (Back) ======\n`); preview.push(gcodeVCutsBack); }
-            if (gcodeDrill)     { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: DRILL ======\n`); preview.push(gcodeDrill); }
-            if (gcodeDepanel)   { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: DEPANELIZATION ======\n`); preview.push(gcodeDepanel); }
-            if (gcodeOutline)   { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: OUTLINE (Board Outline) ======\n`); preview.push(gcodeOutline); }
+            if (twoLayerMode) {
+                const totalFiles = [gcSide1, gcSide2].filter(Boolean).length;
+                if (gcSide1) { preview.push(`; ====== FILE ${++fileNum} OF ${totalFiles}: SIDE 1 ======\n`); preview.push(gcSide1); }
+                if (gcSide2) { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: SIDE 2 ======\n`); preview.push(gcSide2); }
+            } else {
+                const totalFiles = [gcodeTraces, gcodeVCuts, gcodeVCutsBack, gcodeDrill, gcodeDepanel, gcodeOutline].filter(Boolean).length;
+                if (gcodeTraces)    { preview.push(`; ====== FILE ${++fileNum} OF ${totalFiles}: TRACES (Isolation Routing) ======\n`); preview.push(gcodeTraces); }
+                if (gcodeVCuts)     { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: V-CUTS (Front) ======\n`); preview.push(gcodeVCuts); }
+                if (gcodeVCutsBack) { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: V-CUTS (Back) ======\n`); preview.push(gcodeVCutsBack); }
+                if (gcodeDrill)     { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: DRILL ======\n`); preview.push(gcodeDrill); }
+                if (gcodeDepanel)   { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: DEPANELIZATION ======\n`); preview.push(gcodeDepanel); }
+                if (gcodeOutline)   { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: OUTLINE (Board Outline) ======\n`); preview.push(gcodeOutline); }
+            }
             result = preview.join('\n');
         }
 
@@ -5783,7 +5876,7 @@ self.onmessage = function(e) {
     [
         'safeZ', 'plungeRate', 'spindleRpm', 'spindleDelay',
         'drillDepth', 'drillFeedRate', 'feedRate', 'cutDepth', 'passDepth', 'tabWidth', 'tabLayers',
-        'isoFeedRate', 'isoDepth'
+        'isoFeedRate', 'isoDepth', 'drillOnBackSide'
     ].forEach(id => document.getElementById(id).addEventListener('input', updateRuntimeEstimate));
 
     // =========================================================
