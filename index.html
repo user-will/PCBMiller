@@ -710,6 +710,16 @@
             border-color: rgba(227,255,106,0.35);
             color: var(--accent);
         }
+        #vcutXsection {
+            display: block;
+            width: 100%;
+            max-width: 100%;
+            height: 140px;
+            border-radius: 16px;
+            margin: 8px 0 4px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(3, 5, 6, 0.68);
+        }
     </style>
 </head>
 <body>
@@ -894,12 +904,31 @@
             <h2>V-Cut Scoring</h2>
             <div class="hint" style="margin-bottom:8px">V-bit angle and tip diameter are set in Isolation Routing above</div>
             <div class="input-group">
-                <label>V-Cut Depth</label>
+                <label>Board Thickness</label>
+                <div class="input-row">
+                    <input type="number" id="boardThickness" value="1.6" step="0.1" min="0.2" max="10">
+                    <span class="unit">mm</span>
+                </div>
+                <div class="hint">Sets suggested cut depth and cross-section preview</div>
+            </div>
+            <div class="input-group">
+                <label id="vcutDepthLabel">V-Cut Depth</label>
                 <div class="input-row">
                     <input type="number" id="vcutDepth" value="0.3" step="0.05" min="0.05">
                     <span class="unit">mm</span>
                 </div>
-                <div class="hint">Partial depth — board scores but does not cut through</div>
+                <div class="hint" id="vcutDepthHint">Partial depth — board scores but does not cut through</div>
+            </div>
+            <div class="input-group" style="margin-top:2px">
+                <label class="toggle-label">
+                    <input type="checkbox" id="vcutBothSides"> Score Both Sides
+                </label>
+                <div class="hint">Also score from back — adds back V-cuts to Side 2 or a flip step</div>
+            </div>
+            <canvas id="vcutXsection" width="240" height="140"></canvas>
+            <div class="info-row" style="margin-bottom:6px">
+                <span class="info-label">Remaining material</span>
+                <span class="info-value" id="vcutRemaining">—</span>
             </div>
             <div class="input-group">
                 <label>V-Cut Feed Rate</label>
@@ -1130,6 +1159,7 @@
                     <button class="btn-secondary hidden" id="downloadDrillBtn">Drill.nc</button>
                     <button class="btn-secondary hidden" id="downloadOutlineBtn">Outline.nc</button>
                     <button class="btn-secondary hidden" id="downloadVCutsBtn">VCuts.nc</button>
+                    <button class="btn-secondary hidden" id="downloadVCutsBackBtn">VCutsBack.nc</button>
                     <button class="btn-secondary hidden" id="downloadDepanelBtn">Depanel.nc</button>
                     <button class="btn-secondary hidden" id="downloadSide1Btn">Side1.nc</button>
                     <button class="btn-secondary hidden" id="downloadSide2Btn">Side2.nc</button>
@@ -1244,6 +1274,8 @@
     let alignPinMode        = false;
     let gcSide1 = '';  // separate-mode two-layer: side 1
     let gcSide2 = '';  // separate-mode two-layer: side 2
+    let vcutBothSides = false;
+    let gcodeVCutsBack = '';  // separate-mode: back side V-cut GCode (non-two-layer)
 
     // Canvas pan/zoom
     let viewScale = 10;
@@ -1334,6 +1366,7 @@
     const sideViewSection      = document.getElementById('sideViewSection');
     const downloadSide1Btn     = document.getElementById('downloadSide1Btn');
     const downloadSide2Btn     = document.getElementById('downloadSide2Btn');
+    const downloadVCutsBackBtn = document.getElementById('downloadVCutsBackBtn');
 
     function show(el) { el.classList.remove('hidden'); }
     function hide(el) { el.classList.add('hidden'); }
@@ -1574,6 +1607,7 @@
         if (vcutSelectedSet.size > 0) {
             const feed  = Math.max(1, parseFloat(document.getElementById('vcutFeedRate').value) || 150);
             const depth = parseFloat(document.getElementById('vcutDepth').value) || 0.3;
+            const sides = vcutBothSides ? 2 : 1;
             const activeSegs = vcutSegments.filter((_, i) => vcutSelectedSet.has(i));
             const sorted = sortSegmentsNearestNeighbor(activeSegs, 0, 0);
             let cx = 0, cy = 0;
@@ -1585,6 +1619,7 @@
                 minutes += Math.hypot(p2.x - p1.x, p2.y - p1.y) / feed;
                 cx = p2.x; cy = p2.y;
             }
+            minutes *= sides; // double if scoring both sides
         }
 
         if (depanelMode && depanelToolpaths.length) {
@@ -1702,6 +1737,7 @@
                 document.getElementById('infoVCutLines').textContent = segs.length;
                 document.getElementById('infoVCutSelected').textContent = `${segs.length} / ${segs.length}`;
                 refreshUiState();
+                drawVcutXsection();
                 drawPreview();
             } catch (err) {
                 vcutErrorMsg.textContent = 'Error parsing V-cut file: ' + err.message;
@@ -3969,6 +4005,24 @@ self.onmessage = function(e) {
         lines.push(...optimized);
     }
 
+    function emitBackVCutLines(lines, segs, depth, safeZ, feedRate, plungeRate, f) {
+        if (!segs.length) return;
+        lines.push('');
+        lines.push('; === V-CUT SCORING — BACK SIDE (mirrored X) ===');
+        const sorted = sortSegmentsNearestNeighbor(segs, 0, 0);
+        for (const seg of sorted) {
+            const p1 = toGCBack({ x: seg.x1, y: seg.y1 });
+            const p2 = toGCBack({ x: seg.x2, y: seg.y2 });
+            lines.push(`G0 X${f(p1.x)} Y${f(p1.y)}`);
+            lines.push(`G1 Z${f(depth)} F${plungeRate}  ; plunge`);
+            lines.push(`G1 X${f(p2.x)} Y${f(p2.y)} F${feedRate}`);
+            lines.push(`G0 Z${f(safeZ)}  ; retract`);
+        }
+        const optimized = optimizeG1Moves(lines);
+        lines.length = 0;
+        lines.push(...optimized);
+    }
+
     // Emit G-code for depanelization — cut around each sub-board contour in the panel.
     // toolpaths: array of offset contours (internal Y-down coords).
     // autoTabCount: number of evenly-spaced tabs per sub-board (0 = no tabs).
@@ -4141,8 +4195,9 @@ self.onmessage = function(e) {
         const activeDepanelToolpaths = depanelMode && parsedContours.length >= 2
             ? (depanelToolpaths.length ? depanelToolpaths : buildDepanelToolpaths())
             : [];
-        const hasVCuts   = activeVCuts.length > 0;
-        const hasIsolation = activeIsolationPaths.length > 0;
+        const hasVCuts      = activeVCuts.length > 0;
+        const hasBackVCuts  = hasVCuts && vcutBothSides;
+        const hasIsolation  = activeIsolationPaths.length > 0;
         const activeBackIsolationPaths = twoLayerMode ? backCopperToolpaths.filter((_, i) => backIsoSelectedSet.has(i)) : [];
         const hasBackIsolation = activeBackIsolationPaths.length > 0;
         const hasAlignPins = twoLayerMode && alignmentPins.length > 0;
@@ -4241,6 +4296,9 @@ self.onmessage = function(e) {
 
         const vcutLines = [];
         if (hasVCuts) emitVCutLines(vcutLines, activeVCuts, vcutDepthVal, safeZ, vcutFeedRate, plungeRate, f);
+
+        const backVcutLines = [];
+        if (hasBackVCuts) emitBackVCutLines(backVcutLines, activeVCuts, vcutDepthVal, safeZ, vcutFeedRate, plungeRate, f);
 
         const drillLines = [];
         if (hasDrill) emitDrillLines(drillLines, drillHoles, drillDepth, safeZ, drillFeedRate, spindleRpm, spindleDelay, f);
@@ -4367,7 +4425,7 @@ self.onmessage = function(e) {
                 lines.push(...merged[i].content);
             }
 
-            if (twoLayerMode && hasBackIsolation) {
+            if ((twoLayerMode && (hasBackIsolation || hasBackVCuts)) || (!twoLayerMode && hasBackVCuts)) {
                 const flipInstructions = [
                     '',
                     'M5   ; spindle off — SIDE 1 COMPLETE',
@@ -4392,14 +4450,15 @@ self.onmessage = function(e) {
                 if (spindleDelay > 0) flipInstructions.push(`G4 P${spindleDelay}  ; wait for spindle`);
                 flipInstructions.push(`G0 Z${f(safeZ)}`);
                 lines.push(...flipInstructions);
-                lines.push(...backIsolationLines);
+                if (hasBackIsolation) lines.push(...backIsolationLines);
+                if (hasBackVCuts)     lines.push(...backVcutLines);
             }
             lines.push('');
             lines.push('M5   ; spindle off');
             lines.push(`G0 Z${f(safeZ)}`);
             lines.push('M30  ; end of program');
 
-            gcodeTraces = gcodeOutline = gcodeDrill = gcodeVCuts = gcodeDepanel = '';
+            gcodeTraces = gcodeOutline = gcodeDrill = gcodeVCuts = gcodeDepanel = gcodeVCutsBack = '';
             gcSide1 = gcSide2 = '';
             result = optimizeMotionOutput(lines).join('\n');
         } else {
@@ -4413,11 +4472,13 @@ self.onmessage = function(e) {
                 ]).join('\n');
             }
 
-            gcodeTraces  = hasIsolation ? buildSectionFile('Isolation Routing', isolationLines) : '';
-            gcodeVCuts   = hasVCuts     ? buildSectionFile('V-Cut Scoring',     vcutLines)      : '';
-            gcodeDrill   = hasDrill     ? buildSectionFile('Drilling',           drillLines)     : '';
-            gcodeDepanel = hasDepanel   ? buildSectionFile('Depanelization',     depanelLines)   : '';
-            gcodeOutline = hasEdgeCuts  ? buildSectionFile('Board Outline',      edgeLines)      : '';
+            gcodeTraces    = hasIsolation ? buildSectionFile('Isolation Routing', isolationLines) : '';
+            gcodeVCuts     = hasVCuts     ? buildSectionFile('V-Cut Scoring',     vcutLines)      : '';
+            gcodeDrill     = hasDrill     ? buildSectionFile('Drilling',           drillLines)     : '';
+            gcodeDepanel   = hasDepanel   ? buildSectionFile('Depanelization',     depanelLines)   : '';
+            gcodeOutline   = hasEdgeCuts  ? buildSectionFile('Board Outline',      edgeLines)      : '';
+            gcodeVCutsBack = (!twoLayerMode && hasBackVCuts)
+                ? buildSectionFile('V-Cut Scoring — Back Side', backVcutLines) : '';
 
             if (twoLayerMode) {
                 // Build Side 1: front iso + V-cuts + alignment pin drilling + through holes + outline
@@ -4436,8 +4497,11 @@ self.onmessage = function(e) {
                     '; ================================================================',
                     '',
                 ];
-                gcSide2 = hasBackIsolation
-                    ? buildSectionFile('Side 2 — Back', [...side2Header, ...backIsolationLines])
+                const side2Content = [...side2Header];
+                if (hasBackIsolation) side2Content.push(...backIsolationLines);
+                if (hasBackVCuts)     side2Content.push(...backVcutLines);
+                gcSide2 = (hasBackIsolation || hasBackVCuts)
+                    ? buildSectionFile('Side 2 — Back', side2Content)
                     : '';
             } else {
                 gcSide1 = gcSide2 = '';
@@ -4446,12 +4510,13 @@ self.onmessage = function(e) {
             // Textarea shows a combined preview so the user can review all content
             const preview = [];
             let fileNum = 0;
-            const totalFiles = [gcodeTraces, gcodeVCuts, gcodeDrill, gcodeDepanel, gcodeOutline].filter(Boolean).length;
-            if (gcodeTraces)  { preview.push(`; ====== FILE ${++fileNum} OF ${totalFiles}: TRACES (Isolation Routing) ======\n`); preview.push(gcodeTraces); }
-            if (gcodeVCuts)   { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: V-CUTS ======\n`); preview.push(gcodeVCuts); }
-            if (gcodeDrill)   { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: DRILL ======\n`); preview.push(gcodeDrill); }
-            if (gcodeDepanel) { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: DEPANELIZATION ======\n`); preview.push(gcodeDepanel); }
-            if (gcodeOutline) { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: OUTLINE (Board Outline) ======\n`); preview.push(gcodeOutline); }
+            const totalFiles = [gcodeTraces, gcodeVCuts, gcodeVCutsBack, gcodeDrill, gcodeDepanel, gcodeOutline].filter(Boolean).length;
+            if (gcodeTraces)    { preview.push(`; ====== FILE ${++fileNum} OF ${totalFiles}: TRACES (Isolation Routing) ======\n`); preview.push(gcodeTraces); }
+            if (gcodeVCuts)     { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: V-CUTS (Front) ======\n`); preview.push(gcodeVCuts); }
+            if (gcodeVCutsBack) { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: V-CUTS (Back) ======\n`); preview.push(gcodeVCutsBack); }
+            if (gcodeDrill)     { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: DRILL ======\n`); preview.push(gcodeDrill); }
+            if (gcodeDepanel)   { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: DEPANELIZATION ======\n`); preview.push(gcodeDepanel); }
+            if (gcodeOutline)   { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: OUTLINE (Board Outline) ======\n`); preview.push(gcodeOutline); }
             result = preview.join('\n');
         }
 
@@ -4699,6 +4764,171 @@ self.onmessage = function(e) {
             }
         };
         reader.readAsText(file);
+    }
+
+    function drawVcutXsection() {
+        const el = document.getElementById('vcutXsection');
+        if (!el) return;
+        const xCtx = el.getContext('2d');
+
+        const boardThickness = parseFloat(document.getElementById('boardThickness')?.value) || 1.6;
+        const depthFront     = Math.max(0, parseFloat(document.getElementById('vcutDepth')?.value) || 0.3);
+        const bothSides      = document.getElementById('vcutBothSides')?.checked || false;
+        const depthBack      = bothSides ? depthFront : 0;
+        const angle          = parseFloat(document.getElementById('vbitAngle')?.value) || 30;
+        const tipDiam        = parseFloat(document.getElementById('isoToolDiam')?.value) || 0.1;
+        const remaining      = boardThickness - depthFront - depthBack;
+        const overcut        = remaining < -0.001;
+
+        const DPR  = window.devicePixelRatio || 1;
+        const cssW = el.clientWidth || 240;
+        const cssH = el.clientHeight || 140;
+        if (el.width !== Math.round(cssW * DPR) || el.height !== Math.round(cssH * DPR)) {
+            el.width  = Math.round(cssW * DPR);
+            el.height = Math.round(cssH * DPR);
+        }
+        xCtx.setTransform(1, 0, 0, 1, 0, 0);
+        xCtx.scale(DPR, DPR);
+
+        const W = cssW, H = cssH;
+        const marginX = 46, marginY = 14;
+        const boardPxW = W - marginX - 14;
+        const boardPxH = H - marginY * 2;
+        const boardX = marginX, boardY = marginY;
+        const sc = boardPxH / Math.max(boardThickness, 0.001);
+        const cx = boardX + boardPxW / 2;
+
+        const tanHalf       = Math.tan((angle / 2) * Math.PI / 180);
+        const cutHalfFront  = ((tipDiam / 2) + depthFront * tanHalf) * sc;
+        const cutHalfBack   = ((tipDiam / 2) + depthBack  * tanHalf) * sc;
+        const tipHalfPx     = (tipDiam / 2) * sc;
+        const depthFrontPx  = depthFront * sc;
+        const depthBackPx   = depthBack  * sc;
+        const copperPx      = Math.max(2, Math.min(5, 0.035 * sc));
+
+        xCtx.clearRect(0, 0, W, H);
+        xCtx.fillStyle = '#0a0d10';
+        xCtx.fillRect(0, 0, W, H);
+
+        // Board body
+        xCtx.fillStyle = overcut ? 'rgba(255,50,50,0.14)' : 'rgba(33,48,58,0.92)';
+        xCtx.fillRect(boardX, boardY, boardPxW, boardPxH);
+        xCtx.strokeStyle = overcut ? 'rgba(255,80,80,0.45)' : 'rgba(255,255,255,0.07)';
+        xCtx.lineWidth = 1;
+        xCtx.strokeRect(boardX, boardY, boardPxW, boardPxH);
+
+        // Copper layers
+        xCtx.fillStyle = 'rgba(239,177,87,0.85)';
+        xCtx.fillRect(boardX, boardY, boardPxW, copperPx);
+        xCtx.fillRect(boardX, boardY + boardPxH - copperPx, boardPxW, copperPx);
+
+        // Front V-cut (from top)
+        if (depthFrontPx > 0.5) {
+            xCtx.beginPath();
+            xCtx.moveTo(cx - cutHalfFront, boardY);
+            xCtx.lineTo(cx - tipHalfPx, boardY + depthFrontPx);
+            xCtx.lineTo(cx + tipHalfPx, boardY + depthFrontPx);
+            xCtx.lineTo(cx + cutHalfFront, boardY);
+            xCtx.closePath();
+            xCtx.fillStyle = '#0a0d10';
+            xCtx.fill();
+            xCtx.strokeStyle = 'rgba(255,177,74,0.55)';
+            xCtx.lineWidth = 1;
+            xCtx.stroke();
+        }
+
+        // Back V-cut (from bottom)
+        if (depthBackPx > 0.5) {
+            xCtx.beginPath();
+            xCtx.moveTo(cx - cutHalfBack, boardY + boardPxH);
+            xCtx.lineTo(cx - tipHalfPx, boardY + boardPxH - depthBackPx);
+            xCtx.lineTo(cx + tipHalfPx, boardY + boardPxH - depthBackPx);
+            xCtx.lineTo(cx + cutHalfBack, boardY + boardPxH);
+            xCtx.closePath();
+            xCtx.fillStyle = '#0a0d10';
+            xCtx.fill();
+            xCtx.strokeStyle = 'rgba(93,219,255,0.55)';
+            xCtx.lineWidth = 1;
+            xCtx.stroke();
+        }
+
+        xCtx.font = '9px IBM Plex Mono, monospace';
+        const annotX = boardX + boardPxW + 5;
+
+        // Board thickness annotation (left side)
+        xCtx.strokeStyle = 'rgba(255,255,255,0.18)';
+        xCtx.lineWidth = 1;
+        xCtx.setLineDash([2, 3]);
+        xCtx.beginPath();
+        xCtx.moveTo(boardX - 5, boardY); xCtx.lineTo(boardX - 5, boardY + boardPxH);
+        xCtx.stroke();
+        xCtx.setLineDash([]);
+        xCtx.fillStyle = 'rgba(255,255,255,0.35)';
+        xCtx.textAlign = 'right';
+        xCtx.textBaseline = 'middle';
+        xCtx.fillText(`${boardThickness.toFixed(1)}`, boardX - 8, boardY + boardPxH / 2);
+
+        // Front depth annotation (right side)
+        if (depthFrontPx > 6) {
+            xCtx.strokeStyle = '#ffb14a';
+            xCtx.lineWidth = 1;
+            xCtx.setLineDash([2, 3]);
+            xCtx.beginPath();
+            xCtx.moveTo(annotX, boardY); xCtx.lineTo(annotX, boardY + depthFrontPx);
+            xCtx.stroke();
+            xCtx.setLineDash([]);
+            xCtx.fillStyle = '#ffb14a';
+            xCtx.textAlign = 'left';
+            xCtx.textBaseline = 'middle';
+            xCtx.fillText(`${depthFront.toFixed(2)}`, annotX + 3, boardY + depthFrontPx / 2);
+        }
+
+        // Back depth annotation (right side)
+        if (depthBackPx > 6) {
+            xCtx.strokeStyle = '#5ddbff';
+            xCtx.lineWidth = 1;
+            xCtx.setLineDash([2, 3]);
+            xCtx.beginPath();
+            xCtx.moveTo(annotX, boardY + boardPxH); xCtx.lineTo(annotX, boardY + boardPxH - depthBackPx);
+            xCtx.stroke();
+            xCtx.setLineDash([]);
+            xCtx.fillStyle = '#5ddbff';
+            xCtx.textAlign = 'left';
+            xCtx.textBaseline = 'middle';
+            xCtx.fillText(`${depthBack.toFixed(2)}`, annotX + 3, boardY + boardPxH - depthBackPx / 2);
+        }
+
+        // Remaining material (left side, between cut tips)
+        if (bothSides && !overcut && remaining > 0 && depthFrontPx + depthBackPx < boardPxH - 2) {
+            const remY1 = boardY + depthFrontPx;
+            const remY2 = boardY + boardPxH - depthBackPx;
+            xCtx.strokeStyle = '#7dffae';
+            xCtx.lineWidth = 1;
+            xCtx.setLineDash([2, 3]);
+            xCtx.beginPath();
+            xCtx.moveTo(boardX - 20, remY1); xCtx.lineTo(boardX - 20, remY2);
+            xCtx.stroke();
+            xCtx.setLineDash([]);
+            xCtx.fillStyle = '#7dffae';
+            xCtx.textAlign = 'right';
+            xCtx.textBaseline = 'middle';
+            xCtx.fillText(`${remaining.toFixed(2)}`, boardX - 23, (remY1 + remY2) / 2);
+        }
+
+        // Update remaining info row
+        const remEl = document.getElementById('vcutRemaining');
+        if (remEl) {
+            if (!bothSides) {
+                remEl.textContent = `${(boardThickness - depthFront).toFixed(2)} mm (one side)`;
+                remEl.style.color = '';
+            } else if (overcut) {
+                remEl.textContent = `⚠ cuts overlap by ${Math.abs(remaining).toFixed(2)} mm`;
+                remEl.style.color = '#ff5d61';
+            } else {
+                remEl.textContent = `${remaining.toFixed(2)} mm`;
+                remEl.style.color = remaining < 0.2 ? '#ff8c42' : '';
+            }
+        }
     }
 
     function drawVbitPreview() {
@@ -5267,7 +5497,8 @@ self.onmessage = function(e) {
         downloadTracesBtn.classList.toggle('hidden',  isCombined || twoLayerMode || !gcodeTraces);
         downloadDrillBtn.classList.toggle('hidden',   isCombined || twoLayerMode || !gcodeDrill);
         downloadOutlineBtn.classList.toggle('hidden',  isCombined || twoLayerMode || !gcodeOutline);
-        downloadVCutsBtn.classList.toggle('hidden',    isCombined || twoLayerMode || !gcodeVCuts);
+        downloadVCutsBtn.classList.toggle('hidden',     isCombined || twoLayerMode || !gcodeVCuts);
+        downloadVCutsBackBtn.classList.toggle('hidden', isCombined || twoLayerMode || !gcodeVCutsBack);
         downloadDepanelBtn.classList.toggle('hidden',  isCombined || twoLayerMode || !gcodeDepanel);
         downloadSide1Btn.classList.toggle('hidden', !twoLayerMode || !gcSide1);
         downloadSide2Btn.classList.toggle('hidden', !twoLayerMode || !gcSide2);
@@ -5366,8 +5597,19 @@ self.onmessage = function(e) {
         updateRuntimeEstimate();
     });
 
+    // V-cut cross-section: redraw when any relevant input changes
+    function updateVcutXsection() { drawVcutXsection(); updateRuntimeEstimate(); }
+    ['vcutDepth', 'boardThickness'].forEach(id =>
+        document.getElementById(id).addEventListener('input', updateVcutXsection)
+    );
+    document.getElementById('vcutBothSides').addEventListener('change', e => {
+        vcutBothSides = e.target.checked;
+        drawVcutXsection();
+        updateRuntimeEstimate();
+    });
+
     // V-cut and depanel param changes → update runtime estimate
-    ['vcutDepth', 'vcutFeedRate', 'depanelAutoTabs'].forEach(id => {
+    ['vcutFeedRate', 'depanelAutoTabs'].forEach(id => {
         document.getElementById(id).addEventListener('input', updateRuntimeEstimate);
     });
 
@@ -5447,7 +5689,8 @@ self.onmessage = function(e) {
     });
 
     // Download V-cuts and depanel G-code files
-    downloadVCutsBtn.addEventListener('click',   () => downloadNC(gcodeVCuts,   'pcbmill-vcuts.nc'));
+    downloadVCutsBtn.addEventListener('click',     () => downloadNC(gcodeVCuts,     'pcbmill-vcuts.nc'));
+    downloadVCutsBackBtn.addEventListener('click', () => downloadNC(gcodeVCutsBack, 'pcbmill-vcuts-back.nc'));
     downloadDepanelBtn.addEventListener('click', () => downloadNC(gcodeDepanel, 'pcbmill-depanel.nc'));
 
     // Two-layer toggle
@@ -5512,6 +5755,7 @@ self.onmessage = function(e) {
     // V-bit angle → update visuals at current depth (don't overwrite depth)
     document.getElementById('vbitAngle').addEventListener('input', () => {
         updateIsoDepthHint();
+        drawVcutXsection();
         rebuildIsolation();
         if (twoLayerMode && hasBackCopperLoaded()) rebuildIsolationBack();
     });
