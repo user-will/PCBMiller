@@ -683,6 +683,33 @@
                 min-width: 0;
             }
         }
+        .drop-zone.back-copper-loaded {
+            border-color: rgba(91, 180, 255, 0.5);
+            background: linear-gradient(180deg, rgba(91,180,255,0.1), rgba(255,255,255,0.02));
+        }
+        .back-copper-filename { color: #74b4ff; }
+        #preview.align-pin-mode { cursor: crosshair; }
+        .side-toggle { display: flex; gap: 4px; margin-bottom: 8px; }
+        .side-toggle label {
+            flex: 1;
+            padding: 5px 6px;
+            border-radius: 10px;
+            font-size: 0.66rem;
+            border: 1px solid rgba(255,255,255,0.12);
+            cursor: pointer;
+            color: var(--muted);
+            user-select: none;
+            text-align: center;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            background: rgba(255,255,255,0.03);
+        }
+        .side-toggle input[type="radio"] { display: none; }
+        .side-toggle label:has(input:checked) {
+            background: rgba(227,255,106,0.1);
+            border-color: rgba(227,255,106,0.35);
+            color: var(--accent);
+        }
     </style>
 </head>
 <body>
@@ -718,9 +745,25 @@
                 <div class="copper-filename" id="copperFilename"></div>
             </div>
             <input type="file" id="copperFileInput" accept=".svg,.gbr,.ger,.gtl,.gbl,.gts,.gbs">
-            <div class="drop-zone-actions"><button class="btn-secondary hidden" id="clearCopperBtn">Clear Copper</button></div>
+            <div class="drop-zone-actions"><button class="btn-secondary hidden" id="clearCopperBtn">Clear Front Copper</button></div>
             <div class="hint">KiCad: File → Plot → SVG, select F.Cu layer</div>
             <div class="error" id="copperErrorMsg"></div>
+            <div class="input-group" style="margin-top:10px">
+                <label class="toggle-label">
+                    <input type="checkbox" id="twoLayerToggle"> Two-Layer Board
+                </label>
+                <div class="hint">Enable to add back copper, alignment pins, and Side 2 G-code</div>
+            </div>
+            <div id="backCopperGroup" class="hidden" style="margin-top:10px">
+                <label style="display:block;font-size:0.66rem;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.12em">Back Copper (B.Cu)</label>
+                <div class="drop-zone" id="backCopperDropZone">
+                    <div class="drop-zone-text">Drop B_Cu.svg or B_Cu.gbr</div>
+                    <div class="back-copper-filename" id="backCopperFilename"></div>
+                </div>
+                <input type="file" id="backCopperFileInput" accept=".svg,.gbr,.ger,.gtl,.gbl,.gts,.gbs">
+                <div class="drop-zone-actions"><button class="btn-secondary hidden" id="clearBackCopperBtn">Clear Back Copper</button></div>
+                <div class="error" id="backCopperErrorMsg"></div>
+            </div>
         </div>
 
         <!-- Drill File (optional) -->
@@ -749,6 +792,24 @@
             <div class="drop-zone-actions"><button class="btn-secondary hidden" id="clearVCutBtn">Clear V-Cuts</button></div>
             <div class="hint">KiCad: User.1 or Eco1.User layer → File → Plot → Gerber</div>
             <div class="error" id="vcutErrorMsg"></div>
+        </div>
+
+        <!-- Alignment Pins (shown in two-layer mode) -->
+        <div id="alignPinsSection" class="rail-card hidden">
+            <h2>Alignment Pins</h2>
+            <div class="hint" style="margin-bottom:10px">Drill these holes before flipping the board. Use asymmetric positions to prevent loading the board backwards.</div>
+            <div class="input-group">
+                <label>Pin Diameter</label>
+                <div class="input-row">
+                    <input type="number" id="alignPinDiam" value="1.0" step="0.1" min="0.5" max="5">
+                    <span class="unit">mm</span>
+                </div>
+                <div class="hint">Drill bit / pin rod diameter</div>
+            </div>
+            <div class="info-row"><span class="info-label">Pins placed</span><span class="info-value" id="infoAlignPins">0</span></div>
+            <button class="btn-tab-mode" id="alignPinModeBtn">+ Place Pins on Canvas</button>
+            <ul class="tab-list" id="alignPinList"></ul>
+            <hr class="section-divider">
         </div>
 
         <!-- Isolation parameters (shown after copper or V-cut file loads) -->
@@ -1070,6 +1131,8 @@
                     <button class="btn-secondary hidden" id="downloadOutlineBtn">Outline.nc</button>
                     <button class="btn-secondary hidden" id="downloadVCutsBtn">VCuts.nc</button>
                     <button class="btn-secondary hidden" id="downloadDepanelBtn">Depanel.nc</button>
+                    <button class="btn-secondary hidden" id="downloadSide1Btn">Side1.nc</button>
+                    <button class="btn-secondary hidden" id="downloadSide2Btn">Side2.nc</button>
                 </div>
             </div>
         </div>
@@ -1096,6 +1159,11 @@
                         <div>
                             <div class="preview-title">Toolpath Stage</div>
                             <div class="preview-meta" id="previewMeta">Live board render with separated copper, isolation, drills, tabs, and outline passes</div>
+                            <div id="sideViewSection" class="hidden side-toggle" style="margin-top:8px">
+                                <label><input type="radio" name="sideView" id="sideViewFront" value="front" checked><span>Front</span></label>
+                                <label><input type="radio" name="sideView" id="sideViewBoth" value="both"><span>Both</span></label>
+                                <label><input type="radio" name="sideView" id="sideViewBack" value="back"><span>Back</span></label>
+                            </div>
                         </div>
                         <div class="preview-legend">
                             <div class="legend-chip"><span class="legend-swatch" style="color:#ffb14a;background:#ffb14a"></span>Copper</div>
@@ -1105,6 +1173,9 @@
                             <div class="legend-chip"><span class="legend-swatch" style="color:#d9a6ff;background:#d9a6ff"></span>Drill</div>
                             <div class="legend-chip"><span class="legend-swatch" style="color:#e3ff6a;background:#e3ff6a"></span>Tabs</div>
                             <div class="legend-chip"><span class="legend-swatch" style="color:#00d4d4;background:#00d4d4"></span>V-Cuts</div>
+                            <div class="legend-chip hidden" id="legendBackCu"><span class="legend-swatch" style="color:#5bb4ff;background:#5bb4ff"></span>Back Cu</div>
+                            <div class="legend-chip hidden" id="legendBackIso"><span class="legend-swatch" style="color:#5ddbff;background:#5ddbff"></span>Back Iso</div>
+                            <div class="legend-chip hidden" id="legendAlignPins"><span class="legend-swatch" style="color:#e3ff6a;background:#e3ff6a"></span>Align Pins</div>
                         </div>
                     </div>
                     <div class="preview">
@@ -1159,6 +1230,20 @@
     let depanelCutOuter = false;
     let gcodeVCuts     = '';   // separate-mode: V-cut scoring GCode
     let gcodeDepanel   = '';   // separate-mode: depanelization GCode
+
+    // Two-layer / back copper state
+    let backCopperSegments  = [];
+    let backCopperFlashes   = [];
+    let backCopperRegions   = [];
+    let backCopperToolpaths = [];
+    let backCopperBounds    = null;
+    let backIsoSelectedSet  = new Set();
+    let twoLayerMode        = false;
+    let previewSide         = 'front'; // 'front' | 'both' | 'back'
+    let alignmentPins       = []; // [{x, y}] canvas coords
+    let alignPinMode        = false;
+    let gcSide1 = '';  // separate-mode two-layer: side 1
+    let gcSide2 = '';  // separate-mode two-layer: side 2
 
     // Canvas pan/zoom
     let viewScale = 10;
@@ -1237,6 +1322,18 @@
     const tabModeBtn     = document.getElementById('tabModeBtn');
     const tabList        = document.getElementById('tabList');
     const tabHint        = document.getElementById('tabHint');
+    const backCopperDropZone   = document.getElementById('backCopperDropZone');
+    const backCopperFileInput  = document.getElementById('backCopperFileInput');
+    const backCopperFilenameEl = document.getElementById('backCopperFilename');
+    const backCopperErrorMsg   = document.getElementById('backCopperErrorMsg');
+    const clearBackCopperBtn   = document.getElementById('clearBackCopperBtn');
+    const backCopperGroup      = document.getElementById('backCopperGroup');
+    const alignPinsSection     = document.getElementById('alignPinsSection');
+    const alignPinModeBtn      = document.getElementById('alignPinModeBtn');
+    const alignPinList         = document.getElementById('alignPinList');
+    const sideViewSection      = document.getElementById('sideViewSection');
+    const downloadSide1Btn     = document.getElementById('downloadSide1Btn');
+    const downloadSide2Btn     = document.getElementById('downloadSide2Btn');
 
     function show(el) { el.classList.remove('hidden'); }
     function hide(el) { el.classList.add('hidden'); }
@@ -1245,6 +1342,43 @@
     function hasDrillLoaded() { return drillHoles.length > 0; }
     function hasVCutsLoaded() { return vcutSegments.length > 0; }
     function getOuterContourIndex() { return outerContour ? parsedContours.indexOf(outerContour) : -1; }
+
+    function hasBackCopperLoaded() { return backCopperSegments.length || backCopperFlashes.length || backCopperRegions.length; }
+
+    // For back-copper G-code: mirror X around the board centre.
+    function toGCMirrored(pt) {
+        const bounds = gcBounds || boardBounds || copperBounds;
+        return { x: bounds.maxX - pt.x, y: bounds.maxY - pt.y };
+    }
+
+    function disableAlignPinMode() {
+        alignPinMode = false;
+        if (alignPinModeBtn) alignPinModeBtn.classList.remove('active');
+        canvas.classList.remove('align-pin-mode');
+    }
+
+    function renderAlignPinList() {
+        if (!alignPinList) return;
+        const bounds = boardBounds || copperBounds;
+        alignPinList.innerHTML = alignmentPins.map((pin, i) => {
+            const gx = bounds ? (pin.x - bounds.minX).toFixed(2) : '?';
+            const gy = bounds ? (bounds.maxY - pin.y).toFixed(2) : '?';
+            return `<li class="tab-item">
+                <span>Pin ${i + 1} &nbsp; X${gx} Y${gy} mm</span>
+                <button class="tab-remove" data-pin-idx="${i}" title="Remove pin">×</button>
+            </li>`;
+        }).join('');
+        alignPinList.querySelectorAll('.tab-remove').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const idx = parseInt(btn.dataset.pinIdx);
+                alignmentPins.splice(idx, 1);
+                renderAlignPinList();
+                document.getElementById('infoAlignPins').textContent = alignmentPins.length;
+                drawPreview();
+            });
+        });
+        document.getElementById('infoAlignPins').textContent = alignmentPins.length;
+    }
 
     function formatMinutes(totalMinutes) {
         if (!isFinite(totalMinutes) || totalMinutes <= 0) return '—';
@@ -1290,6 +1424,19 @@
         clearCopperBtn.classList.toggle('hidden', !hasCopper);
         clearDrillBtn.classList.toggle('hidden', !hasDrill);
         clearVCutBtn.classList.toggle('hidden', !hasVCuts);
+
+        const hasBackCopper = hasBackCopperLoaded();
+        const showAlignPins = twoLayerMode && hasBackCopper;
+        alignPinsSection ? alignPinsSection.classList.toggle('hidden', !showAlignPins) : null;
+        sideViewSection  ? sideViewSection.classList.toggle('hidden', !twoLayerMode) : null;
+
+        // Legend chips for two-layer
+        const legendBackCu   = document.getElementById('legendBackCu');
+        const legendBackIso  = document.getElementById('legendBackIso');
+        const legendAlignPinsEl = document.getElementById('legendAlignPins');
+        if (legendBackCu)       legendBackCu.classList.toggle('hidden', !hasBackCopper);
+        if (legendBackIso)      legendBackIso.classList.toggle('hidden', !hasBackCopper);
+        if (legendAlignPinsEl)  legendAlignPinsEl.classList.toggle('hidden', !alignmentPins.length);
 
         hasEdge ? show(paramsSection) : hide(paramsSection);
         // Hide manual tabs when depanelize mode is active (auto-tabs used instead)
@@ -1458,6 +1605,19 @@
             }
         }
 
+        if (twoLayerMode && backCopperToolpaths.length && (boardBounds || copperBounds)) {
+            const feed = Math.max(1, parseFloat(document.getElementById('isoFeedRate').value) || 200);
+            const depth = parseFloat(document.getElementById('isoDepth').value) || 0.1;
+            for (const path of backCopperToolpaths) {
+                if (path.length < 2) continue;
+                for (let i = 1; i < path.length; i++) {
+                    const a = path[i - 1], b = path[i];
+                    minutes += Math.hypot(b.x - a.x, b.y - a.y) / feed;
+                }
+                minutes += ((safeZ + depth) * 2) / plungeRate;
+            }
+        }
+
         const runtime = formatMinutes(minutes);
         infoRunTime.textContent = runtime;
         headerRunTime.textContent = runtime;
@@ -1507,6 +1667,9 @@
         isoSelectHint.style.display = 'none';
         document.getElementById('infoIsoSelectable').textContent = '—';
         document.getElementById('infoIsoSelected').textContent = '—';
+        if (twoLayerMode && !hasBackCopperLoaded()) {
+            // If front copper cleared and no back copper, rebuild back iso won't run — that's fine
+        }
         refreshUiState();
         drawPreview();
     }
@@ -1613,6 +1776,7 @@
         if (except !== 'vcut') disableVCutSelectMode();
         if (except !== 'iso') disableIsoSelectMode();
         if (except !== 'edge') disableEdgeSelectMode();
+        if (except !== 'alignPin') disableAlignPinMode();
     }
 
     // =========================================================
@@ -2582,7 +2746,8 @@ function buildIsolationToolpaths(segments, flashes, regions, params, boardOutlin
     return paths;
 }
 self.onmessage = function(e) {
-    self.postMessage(buildIsolationToolpaths(e.data.segments, e.data.flashes, e.data.regions, e.data.params, e.data.boardOutline));
+    const paths = buildIsolationToolpaths(e.data.segments, e.data.flashes, e.data.regions, e.data.params, e.data.boardOutline);
+    self.postMessage({ side: e.data.side || 'front', paths });
 };
 `;
 
@@ -2595,10 +2760,16 @@ self.onmessage = function(e) {
         const blob = new Blob([ISO_WORKER_SRC], { type: 'application/javascript' });
         _isoWorker = new Worker(URL.createObjectURL(blob));
         _isoWorker.onmessage = e => {
-            copperToolpaths = e.data;
-            isoSelectedSet = new Set(copperToolpaths.map((_, i) => i));
-            infoIsoPaths.textContent = copperToolpaths.length;
-            updateIsoSelectedDisplay();
+            const { side, paths } = e.data;
+            if (side === 'back') {
+                backCopperToolpaths = paths;
+                backIsoSelectedSet = new Set(paths.map((_, i) => i));
+            } else {
+                copperToolpaths = paths;
+                isoSelectedSet = new Set(paths.map((_, i) => i));
+                infoIsoPaths.textContent = paths.length;
+                updateIsoSelectedDisplay();
+            }
             document.getElementById('isoComputingMsg').style.display = 'none';
             refreshUiState();
             drawPreview();
@@ -3039,6 +3210,7 @@ self.onmessage = function(e) {
 
         withLayerFocus('iso', () => {
             if (!copperToolpaths.length) return;
+            if (twoLayerMode && previewSide === 'back') return;
             const tipDiam  = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
             const angle    = parseFloat(document.getElementById('vbitAngle').value) || 30;
             const depth    = Math.abs(parseFloat(document.getElementById('isoDepth').value) || 0.05);
@@ -3066,6 +3238,7 @@ self.onmessage = function(e) {
         });
 
         withLayerFocus('copper', () => {
+            if (twoLayerMode && previewSide === 'back') return;
             ctx.fillStyle = 'rgba(255,177,74,0.88)';
             for (const region of copperRegions) {
                 if (region.length < 3) continue;
@@ -3096,6 +3269,90 @@ self.onmessage = function(e) {
                 ctx.fill();
             }
         });
+
+        // Back copper (mirrored for display)
+        if (twoLayerMode && previewSide !== 'front') {
+            const dims = boardBounds || copperBounds || backCopperBounds;
+            if (dims && hasBackCopperLoaded()) {
+                ctx.save();
+                ctx.transform(-1, 0, 0, 1, dims.minX + dims.maxX, 0);
+                ctx.fillStyle = 'rgba(91,180,255,0.7)';
+                for (const region of backCopperRegions) {
+                    if (region.length < 3) continue;
+                    ctx.beginPath();
+                    ctx.moveTo(region[0].x, region[0].y);
+                    for (let i = 1; i < region.length; i++) ctx.lineTo(region[i].x, region[i].y);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+                for (const seg of backCopperSegments) {
+                    ctx.beginPath();
+                    ctx.moveTo(seg.x1, seg.y1);
+                    ctx.lineTo(seg.x2, seg.y2);
+                    ctx.strokeStyle = 'rgba(91,180,255,0.8)';
+                    ctx.lineWidth = seg.r * 2;
+                    ctx.lineCap = 'round';
+                    ctx.stroke();
+                    ctx.lineCap = 'butt';
+                }
+                for (const flash of backCopperFlashes) {
+                    const poly = flashBuffer(flash.x, flash.y, flash.ap, 0);
+                    if (poly.length < 3) continue;
+                    ctx.beginPath();
+                    ctx.moveTo(poly[0].x, poly[0].y);
+                    for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+                    ctx.closePath();
+                    ctx.fillStyle = 'rgba(91,180,255,0.8)';
+                    ctx.fill();
+                }
+                ctx.restore();
+            }
+
+            // Back isolation paths (also mirrored)
+            if (dims && backCopperToolpaths.length) {
+                const tipDiam  = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
+                const angle    = parseFloat(document.getElementById('vbitAngle').value) || 30;
+                const depth    = Math.abs(parseFloat(document.getElementById('isoDepth').value) || 0.05);
+                const cutWidth = tipDiam + 2 * depth * Math.tan((angle / 2) * (Math.PI / 180));
+                ctx.save();
+                ctx.transform(-1, 0, 0, 1, dims.minX + dims.maxX, 0);
+                ctx.lineCap  = 'round';
+                ctx.lineJoin = 'round';
+                for (const path of backCopperToolpaths) {
+                    if (path.length < 2) continue;
+                    ctx.beginPath();
+                    ctx.moveTo(path[0].x, path[0].y);
+                    for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
+                    ctx.closePath();
+                    ctx.strokeStyle = 'rgba(93,219,255,0.8)';
+                    ctx.lineWidth = cutWidth;
+                    ctx.stroke();
+                }
+                ctx.lineCap = 'butt';
+                ctx.lineJoin = 'miter';
+                ctx.restore();
+            }
+        }
+
+        // Alignment pins
+        if (alignmentPins.length) {
+            const pinR = (parseFloat(document.getElementById('alignPinDiam')?.value) || 1.0) / 2;
+            ctx.strokeStyle = '#e3ff6a';
+            ctx.fillStyle   = 'rgba(227,255,106,0.12)';
+            ctx.lineWidth   = 0.07;
+            ctx.lineCap     = 'round';
+            for (const pin of alignmentPins) {
+                ctx.beginPath();
+                ctx.arc(pin.x, pin.y, pinR, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(pin.x - pinR * 1.6, pin.y); ctx.lineTo(pin.x + pinR * 1.6, pin.y);
+                ctx.moveTo(pin.x, pin.y - pinR * 1.6); ctx.lineTo(pin.x, pin.y + pinR * 1.6);
+                ctx.stroke();
+            }
+            ctx.lineCap = 'butt';
+        }
 
         withLayerFocus('edge', () => {
             for (let i = 0; i < parsedContours.length; i++) {
@@ -3242,6 +3499,15 @@ self.onmessage = function(e) {
         const bounds = gcBounds || boardBounds || copperBounds;
         return {
             x: pt.x - bounds.minX,
+            y: bounds.maxY - pt.y
+        };
+    }
+
+    // For back copper G-code: mirror X around the board width.
+    function toGCBack(pt) {
+        const bounds = gcBounds || boardBounds || copperBounds;
+        return {
+            x: bounds.maxX - pt.x,
             y: bounds.maxY - pt.y
         };
     }
@@ -3587,6 +3853,40 @@ self.onmessage = function(e) {
         lines.push(...optimizeMotionOutput(optimized));
     }
 
+    function emitBackIsolationLines(lines, paths, isoDepth, safeZ, isoFeedRate, plungeRate, f) {
+        if (!paths.length) return;
+        lines.push('');
+        lines.push('; === BACK COPPER ISOLATION (mirrored X) ===');
+        for (const path of paths) {
+            if (path.length < 2) continue;
+            const start = toGCBack(path[0]);
+            lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
+            lines.push(`G1 Z${f(isoDepth)} F${plungeRate}  ; plunge`);
+            for (let i = 1; i < path.length; i++) {
+                const pt = toGCBack(path[i]);
+                lines.push(`G1 X${f(pt.x)} Y${f(pt.y)} F${isoFeedRate}`);
+            }
+            const closeP = toGCBack(path[0]);
+            lines.push(`G1 X${f(closeP.x)} Y${f(closeP.y)} F${isoFeedRate}  ; close`);
+            lines.push(`G0 Z${f(safeZ)}  ; retract`);
+        }
+    }
+
+    function emitAlignmentPinDrillLines(lines, pins, depth, safeZ, feedRate, f) {
+        if (!pins.length) return;
+        lines.push('');
+        lines.push('; === ALIGNMENT PINS ===');
+        lines.push('; Drill these holes for board registration — also drill into spoilboard at same positions');
+        for (let i = 0; i < pins.length; i++) {
+            const pt = toGC(pins[i]);
+            lines.push('');
+            lines.push(`; Pin ${i + 1}`);
+            lines.push(`G0 X${f(pt.x)} Y${f(pt.y)}`);
+            lines.push(`G1 Z${f(depth)} F${feedRate}  ; drill`);
+            lines.push(`G0 Z${f(safeZ)}  ; retract`);
+        }
+    }
+
     // Build the sorted tab intervals (in arc-length space) from the tabs array.
     function buildTabIntervals() {
         const total = toolpathLens[toolpathLens.length - 1];
@@ -3843,6 +4143,9 @@ self.onmessage = function(e) {
             : [];
         const hasVCuts   = activeVCuts.length > 0;
         const hasIsolation = activeIsolationPaths.length > 0;
+        const activeBackIsolationPaths = twoLayerMode ? backCopperToolpaths.filter((_, i) => backIsoSelectedSet.has(i)) : [];
+        const hasBackIsolation = activeBackIsolationPaths.length > 0;
+        const hasAlignPins = twoLayerMode && alignmentPins.length > 0;
         const hasDepanel = activeDepanelToolpaths.length > 0;
         const hasEdgeCuts = !depanelMode
             ? (!!selectedOuterToolpath || selectedInnerEdgeToolpaths.length > 0)
@@ -3925,6 +4228,16 @@ self.onmessage = function(e) {
         // --- Build content for each operation ---
         const isolationLines = [];
         if (hasIsolation) emitIsolationLines(isolationLines, activeIsolationPaths, isoDepth, safeZ, isoFeedRate, plungeRate, f);
+
+        const backIsolationLines = [];
+        if (hasBackIsolation) emitBackIsolationLines(backIsolationLines, activeBackIsolationPaths, isoDepth, safeZ, isoFeedRate, plungeRate, f);
+
+        const alignPinLines = [];
+        if (hasAlignPins) {
+            const apDepth = -(parseFloat(document.getElementById('drillDepth').value) || 2.0);
+            const apFeed = parseInt(document.getElementById('drillFeedRate').value) || 60;
+            emitAlignmentPinDrillLines(alignPinLines, alignmentPins, apDepth, safeZ, apFeed, f);
+        }
 
         const vcutLines = [];
         if (hasVCuts) emitVCutLines(vcutLines, activeVCuts, vcutDepthVal, safeZ, vcutFeedRate, plungeRate, f);
@@ -4036,6 +4349,7 @@ self.onmessage = function(e) {
                 sections.push({ content: vBitContent, tool: isoTool });
             }
             if (hasDrill)   sections.push({ content: drillLines,   tool: drillTool });
+            if (hasAlignPins) sections.push({ content: alignPinLines, tool: drillTool });
             if (hasDepanel) sections.push({ content: depanelLines, tool: edgeTool });
             if (hasEdgeCuts) sections.push({ content: edgeLines,   tool: edgeTool });
             // Merge consecutive same-tool sections (depanel + edge cuts share end mill)
@@ -4053,12 +4367,40 @@ self.onmessage = function(e) {
                 lines.push(...merged[i].content);
             }
 
+            if (twoLayerMode && hasBackIsolation) {
+                const flipInstructions = [
+                    '',
+                    'M5   ; spindle off — SIDE 1 COMPLETE',
+                    `G0 Z${f(safeZ)}`,
+                    'G0 X0 Y0  ; return to home',
+                    '',
+                    '; ================================================================',
+                    '; FLIP BOARD — SIDE 2',
+                    ';',
+                    ';   Steps:',
+                    ';   1. Power down spindle',
+                    ';   2. Insert alignment pins into drilled holes',
+                    ';   3. Remove PCB from fixture',
+                    ';   4. Flip board face-DOWN and place onto alignment pins',
+                    ';   5. Re-zero Z to the new board surface (touch-off)',
+                    ';   6. Press Cycle Start / Resume',
+                    '; ================================================================',
+                    `M0  ; PAUSE — flip board and re-zero Z, then resume`,
+                    '',
+                    `M3 S${spindleRpm}  ; spindle on`,
+                ];
+                if (spindleDelay > 0) flipInstructions.push(`G4 P${spindleDelay}  ; wait for spindle`);
+                flipInstructions.push(`G0 Z${f(safeZ)}`);
+                lines.push(...flipInstructions);
+                lines.push(...backIsolationLines);
+            }
             lines.push('');
             lines.push('M5   ; spindle off');
             lines.push(`G0 Z${f(safeZ)}`);
             lines.push('M30  ; end of program');
 
             gcodeTraces = gcodeOutline = gcodeDrill = gcodeVCuts = gcodeDepanel = '';
+            gcSide1 = gcSide2 = '';
             result = optimizeMotionOutput(lines).join('\n');
         } else {
             // Separate files — each is a standalone, valid GCode file
@@ -4076,6 +4418,30 @@ self.onmessage = function(e) {
             gcodeDrill   = hasDrill     ? buildSectionFile('Drilling',           drillLines)     : '';
             gcodeDepanel = hasDepanel   ? buildSectionFile('Depanelization',     depanelLines)   : '';
             gcodeOutline = hasEdgeCuts  ? buildSectionFile('Board Outline',      edgeLines)      : '';
+
+            if (twoLayerMode) {
+                // Build Side 1: front iso + V-cuts + alignment pin drilling + through holes + outline
+                const side1Lines = [];
+                if (hasIsolation || hasVCuts) side1Lines.push(...isolationLines, ...vcutLines);
+                if (hasAlignPins) side1Lines.push(...alignPinLines);
+                if (hasDrill) side1Lines.push(...drillLines);
+                if (hasDepanel) side1Lines.push(...depanelLines);
+                if (hasEdgeCuts) side1Lines.push(...edgeLines);
+                gcSide1 = side1Lines.length ? buildSectionFile('Side 1 — Front', side1Lines) : '';
+                // Side 2 header with flip instructions
+                const side2Header = [
+                    '; ================================================================',
+                    '; SIDE 2 — BACK',
+                    '; Before running: flip board face-down onto alignment pins, re-zero Z',
+                    '; ================================================================',
+                    '',
+                ];
+                gcSide2 = hasBackIsolation
+                    ? buildSectionFile('Side 2 — Back', [...side2Header, ...backIsolationLines])
+                    : '';
+            } else {
+                gcSide1 = gcSide2 = '';
+            }
 
             // Textarea shows a combined preview so the user can review all content
             const preview = [];
@@ -4560,6 +4926,7 @@ self.onmessage = function(e) {
             const toolDiam   = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
             const overlapPct = parseFloat(document.getElementById('isoOverlap').value) || 50;
             _getIsoWorker().postMessage({
+                side: 'front',
                 segments:    copperSegments,
                 flashes:     copperFlashes,
                 regions:     copperRegions,
@@ -4572,6 +4939,100 @@ self.onmessage = function(e) {
                 },
             });
         }, 350);
+    }
+
+    function rebuildIsolationBack() {
+        if (!backCopperSegments.length && !backCopperFlashes.length && !backCopperRegions.length) return;
+        clearTimeout(_isoDebounceTimer);
+        document.getElementById('isoComputingMsg').style.display = 'block';
+        _isoDebounceTimer = setTimeout(() => {
+            const toolDiam   = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
+            const overlapPct = parseFloat(document.getElementById('isoOverlap').value) || 50;
+            _getIsoWorker().postMessage({
+                side: 'back',
+                segments:    backCopperSegments,
+                flashes:     backCopperFlashes,
+                regions:     backCopperRegions,
+                boardOutline: outerContour,
+                params: {
+                    toolDiam,
+                    isoWidth:  parseFloat(document.getElementById('isoWidth').value) || 0.2,
+                    numPasses: parseInt(document.getElementById('isoPasses').value) || 2,
+                    stepover:  toolDiam * (1 - overlapPct / 100),
+                },
+            });
+        }, 350);
+    }
+
+    function loadBackCopperFile(file) {
+        if (!backCopperErrorMsg) return;
+        backCopperErrorMsg.textContent = '';
+        const reader = new FileReader();
+        reader.onload = e => {
+            try {
+                const isSVG = file.name.toLowerCase().endsWith('.svg') ||
+                              e.target.result.trimStart().startsWith('<');
+                const { segments, flashes, regions } = isSVG
+                    ? parseCopperSVG(e.target.result)
+                    : parseCopperLayer(e.target.result);
+                if (!segments.length && !flashes.length && !regions.length) {
+                    backCopperErrorMsg.textContent = 'No copper found. Is this a back copper Gerber?';
+                    return;
+                }
+                backCopperSegments = segments;
+                backCopperFlashes  = flashes;
+                backCopperRegions  = regions;
+                backCopperToolpaths = [];
+                backIsoSelectedSet  = new Set();
+
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (const s of segments) {
+                    minX = Math.min(minX, s.x1 - s.r, s.x2 - s.r);
+                    maxX = Math.max(maxX, s.x1 + s.r, s.x2 + s.r);
+                    minY = Math.min(minY, s.y1 - s.r, s.y2 - s.r);
+                    maxY = Math.max(maxY, s.y1 + s.r, s.y2 + s.r);
+                }
+                for (const f of flashes) {
+                    const rw = (f.ap.w || 0) / 2, rh = (f.ap.h || f.ap.w || 0) / 2;
+                    minX = Math.min(minX, f.x - rw); maxX = Math.max(maxX, f.x + rw);
+                    minY = Math.min(minY, f.y - rh); maxY = Math.max(maxY, f.y + rh);
+                }
+                for (const r of regions) {
+                    for (const pt of r) {
+                        minX = Math.min(minX, pt.x); maxX = Math.max(maxX, pt.x);
+                        minY = Math.min(minY, pt.y); maxY = Math.max(maxY, pt.y);
+                    }
+                }
+                backCopperBounds = { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+
+                backCopperDropZone.classList.add('back-copper-loaded');
+                backCopperFilenameEl.textContent = file.name;
+                clearBackCopperBtn.classList.remove('hidden');
+                rebuildIsolationBack();
+                refreshUiState();
+                drawPreview();
+            } catch (err) {
+                backCopperErrorMsg.textContent = 'Parse error: ' + err.message;
+                console.error(err);
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    function clearBackCopperFile() {
+        backCopperSegments = [];
+        backCopperFlashes  = [];
+        backCopperRegions  = [];
+        backCopperToolpaths = [];
+        backCopperBounds   = null;
+        backIsoSelectedSet = new Set();
+        backCopperFilenameEl.textContent = '';
+        backCopperFileInput.value = '';
+        backCopperErrorMsg.textContent = '';
+        backCopperDropZone.classList.remove('back-copper-loaded', 'loaded');
+        clearBackCopperBtn.classList.add('hidden');
+        refreshUiState();
+        drawPreview();
     }
 
     // =========================================================
@@ -4605,6 +5066,15 @@ self.onmessage = function(e) {
             const rect = canvas.getBoundingClientRect();
             const localX = e.clientX - rect.left;
             const localY = e.clientY - rect.top;
+
+            if (alignPinMode) {
+                const { x, y } = canvasToWorld(localX, localY);
+                alignmentPins.push({ x, y });
+                renderAlignPinList();
+                refreshUiState();
+                drawPreview();
+                return;
+            }
 
             if (tabModeActive && toolpath) {
                 const { x, y } = canvasToWorld(localX, localY);
@@ -4793,12 +5263,14 @@ self.onmessage = function(e) {
 
         // Show the right download buttons for the selected mode
         const isCombined = modeCombined.checked;
-        downloadBtn.classList.toggle('hidden', !isCombined);
-        downloadTracesBtn.classList.toggle('hidden',  isCombined || !gcodeTraces);
-        downloadDrillBtn.classList.toggle('hidden',   isCombined || !gcodeDrill);
-        downloadOutlineBtn.classList.toggle('hidden',  isCombined || !gcodeOutline);
-        downloadVCutsBtn.classList.toggle('hidden',    isCombined || !gcodeVCuts);
-        downloadDepanelBtn.classList.toggle('hidden',  isCombined || !gcodeDepanel);
+        downloadBtn.classList.toggle('hidden', !isCombined || twoLayerMode);
+        downloadTracesBtn.classList.toggle('hidden',  isCombined || twoLayerMode || !gcodeTraces);
+        downloadDrillBtn.classList.toggle('hidden',   isCombined || twoLayerMode || !gcodeDrill);
+        downloadOutlineBtn.classList.toggle('hidden',  isCombined || twoLayerMode || !gcodeOutline);
+        downloadVCutsBtn.classList.toggle('hidden',    isCombined || twoLayerMode || !gcodeVCuts);
+        downloadDepanelBtn.classList.toggle('hidden',  isCombined || twoLayerMode || !gcodeDepanel);
+        downloadSide1Btn.classList.toggle('hidden', !twoLayerMode || !gcSide1);
+        downloadSide2Btn.classList.toggle('hidden', !twoLayerMode || !gcSide2);
     });
 
     // Copy G-code (copies textarea content — combined text or full preview)
@@ -4978,10 +5450,70 @@ self.onmessage = function(e) {
     downloadVCutsBtn.addEventListener('click',   () => downloadNC(gcodeVCuts,   'pcbmill-vcuts.nc'));
     downloadDepanelBtn.addEventListener('click', () => downloadNC(gcodeDepanel, 'pcbmill-depanel.nc'));
 
+    // Two-layer toggle
+    document.getElementById('twoLayerToggle').addEventListener('change', e => {
+        twoLayerMode = e.target.checked;
+        backCopperGroup.classList.toggle('hidden', !twoLayerMode);
+        if (!twoLayerMode) {
+            clearBackCopperFile();
+            alignmentPins = [];
+            alignPinMode = false;
+            disableAlignPinMode();
+            previewSide = 'front';
+            document.getElementById('sideViewFront').checked = true;
+            renderAlignPinList();
+        }
+        refreshUiState();
+        drawPreview();
+    });
+
+    // Back copper drop zone
+    backCopperDropZone.addEventListener('click', () => backCopperFileInput.click());
+    clearBackCopperBtn.addEventListener('click', clearBackCopperFile);
+    backCopperDropZone.addEventListener('dragover', e => { e.preventDefault(); backCopperDropZone.classList.add('drag-over'); });
+    backCopperDropZone.addEventListener('dragleave', () => backCopperDropZone.classList.remove('drag-over'));
+    backCopperDropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        backCopperDropZone.classList.remove('drag-over');
+        const file = e.dataTransfer.files[0];
+        if (file) loadBackCopperFile(file);
+    });
+    backCopperFileInput.addEventListener('change', e => { if (e.target.files[0]) loadBackCopperFile(e.target.files[0]); });
+
+    // Alignment pin mode toggle
+    alignPinModeBtn.addEventListener('click', () => {
+        const next = !alignPinMode;
+        disableOtherInteractionModes(next ? 'alignPin' : '');
+        alignPinMode = next;
+        alignPinModeBtn.classList.toggle('active', alignPinMode);
+        canvas.classList.toggle('align-pin-mode', alignPinMode);
+    });
+
+    // Side view toggle
+    ['sideViewFront', 'sideViewBoth', 'sideViewBack'].forEach(id => {
+        document.getElementById(id).addEventListener('change', e => {
+            if (e.target.checked) {
+                previewSide = e.target.value;
+                drawPreview();
+            }
+        });
+    });
+
+    // Side 1 / Side 2 downloads
+    downloadSide1Btn.addEventListener('click', () => downloadNC(gcSide1, 'pcbmill-side1.nc'));
+    downloadSide2Btn.addEventListener('click', () => downloadNC(gcSide2, 'pcbmill-side2.nc'));
+
+    // Alignment pin diameter change → redraw (crosshair size updates)
+    document.getElementById('alignPinDiam').addEventListener('input', () => {
+        scheduleRedraw();
+        renderAlignPinList();
+    });
+
     // V-bit angle → update visuals at current depth (don't overwrite depth)
     document.getElementById('vbitAngle').addEventListener('input', () => {
         updateIsoDepthHint();
         rebuildIsolation();
+        if (twoLayerMode && hasBackCopperLoaded()) rebuildIsolationBack();
     });
 
     // isoWidth / isoToolDiam → recalc depth from angle (if set), then rebuild
@@ -4989,15 +5521,19 @@ self.onmessage = function(e) {
         document.getElementById(id).addEventListener('input', () => {
             updateIsoDepthFromAngle();
             rebuildIsolation();
+            if (twoLayerMode && hasBackCopperLoaded()) rebuildIsolationBack();
         });
     });
 
     // Manual depth override → just update the cut-width hint
     document.getElementById('isoDepth').addEventListener('input', updateIsoDepthHint);
 
-    // Isolation parameter changes → rebuild toolpaths
+    // Isolation parameter changes → rebuild toolpaths (both sides)
     ['isoPasses', 'isoOverlap'].forEach(id => {
-        document.getElementById(id).addEventListener('input', rebuildIsolation);
+        document.getElementById(id).addEventListener('input', () => {
+            rebuildIsolation();
+            if (twoLayerMode && hasBackCopperLoaded()) rebuildIsolationBack();
+        });
     });
 
     [
