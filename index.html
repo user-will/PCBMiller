@@ -3317,14 +3317,14 @@ self.onmessage = function(e) {
         });
 
         const previewMirrorDims = boardBounds || copperBounds || backCopperBounds;
-        const previewMirrorAxis = previewMirrorDims ? getBackMirrorAxisWorld(previewMirrorDims) : null;
+        const backViewMirrorAxis = previewMirrorDims ? getBackMirrorAxisWorld(previewMirrorDims) : null;
         const withBackPreviewMirror = draw => {
-            if (!(twoLayerMode && previewSide === 'back' && previewMirrorAxis != null)) {
+            if (!(twoLayerMode && previewSide === 'back' && backViewMirrorAxis != null)) {
                 draw();
                 return;
             }
             ctx.save();
-            ctx.transform(-1, 0, 0, 1, previewMirrorAxis, 0);
+            ctx.transform(-1, 0, 0, 1, backViewMirrorAxis, 0);
             draw();
             ctx.restore();
         };
@@ -3334,7 +3334,9 @@ self.onmessage = function(e) {
             const dims = previewMirrorDims;
             if (dims && hasBackCopperLoaded()) {
                 ctx.save();
-                ctx.transform(-1, 0, 0, 1, previewMirrorAxis, 0);
+                if (previewSide === 'back' && backViewMirrorAxis != null) {
+                    ctx.transform(-1, 0, 0, 1, backViewMirrorAxis, 0);
+                }
                 ctx.fillStyle = 'rgba(91,180,255,0.7)';
                 for (const region of backCopperRegions) {
                     if (region.length < 3) continue;
@@ -3374,7 +3376,9 @@ self.onmessage = function(e) {
                 const depth    = Math.abs(parseFloat(document.getElementById('isoDepth').value) || 0.05);
                 const cutWidth = tipDiam + 2 * depth * Math.tan((angle / 2) * (Math.PI / 180));
                 ctx.save();
-                ctx.transform(-1, 0, 0, 1, previewMirrorAxis, 0);
+                if (previewSide === 'back' && backViewMirrorAxis != null) {
+                    ctx.transform(-1, 0, 0, 1, backViewMirrorAxis, 0);
+                }
                 ctx.lineCap  = 'round';
                 ctx.lineJoin = 'round';
                 for (const path of backCopperToolpaths) {
