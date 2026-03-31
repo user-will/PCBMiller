@@ -885,7 +885,7 @@
             <div class="input-group">
                 <label>Isolation Width</label>
                 <div class="input-row">
-                    <input type="number" id="isoWidth" value="0.2" step="0.05" min="0.05" max="5">
+                    <input type="number" id="isoWidth" value="0.2" step="0.05" min="0" max="5">
                     <span class="unit">mm</span>
                 </div>
                 <div class="hint">Minimum clearance gap from trace edge</div>
@@ -3007,7 +3007,7 @@ self.onmessage = function(e) {
         }
 
         const toolDiam   = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
-        const isoWidth   = parseFloat(document.getElementById('isoWidth').value) || 0.2;
+        const isoWidth   = isFinite(parseFloat(document.getElementById('isoWidth').value)) ? parseFloat(document.getElementById('isoWidth').value) : 0.2;
         const numPasses  = parseInt(document.getElementById('isoPasses').value) || 2;
         const overlapPct = parseFloat(document.getElementById('isoOverlap').value) || 50;
         const stepover   = toolDiam * (1 - overlapPct / 100);
@@ -5324,7 +5324,7 @@ self.onmessage = function(e) {
                 boardOutline: outerContour,
                 params: {
                     toolDiam,
-                    isoWidth:  parseFloat(document.getElementById('isoWidth').value) || 0.2,
+                    isoWidth:  isFinite(parseFloat(document.getElementById('isoWidth').value)) ? parseFloat(document.getElementById('isoWidth').value) : 0.2,
                     numPasses: parseInt(document.getElementById('isoPasses').value) || 2,
                     stepover:  toolDiam * (1 - overlapPct / 100),
                     vbitAngle: isEndMillMode() ? 0 : (parseFloat(document.getElementById('vbitAngle').value) || 0),
@@ -5350,7 +5350,7 @@ self.onmessage = function(e) {
                 boardOutline: outerContour,
                 params: {
                     toolDiam,
-                    isoWidth:  parseFloat(document.getElementById('isoWidth').value) || 0.2,
+                    isoWidth:  isFinite(parseFloat(document.getElementById('isoWidth').value)) ? parseFloat(document.getElementById('isoWidth').value) : 0.2,
                     numPasses: parseInt(document.getElementById('isoPasses').value) || 2,
                     stepover:  toolDiam * (1 - overlapPct / 100),
                     vbitAngle: isEndMillMode() ? 0 : (parseFloat(document.getElementById('vbitAngle').value) || 0),
