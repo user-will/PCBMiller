@@ -2878,8 +2878,11 @@ function buildIsolationToolpaths(segments, flashes, regions, params, boardOutlin
         var boardTouchTol = Math.max(2, Math.round(0.002 * CLIPPER_SCALE));
         for (var k=0;k<freeArea.length;k++) {
             var cpoly=freeArea[k]; if (cpoly.length<3) continue;
-            var a=Math.abs(ClipperLib.Clipper.Area(cpoly)); if (a>0.5*boardArea) continue;
-            if (usingRealBoard && pathTouchesBoard(cpoly, boardClipPath, boardTouchTol)) continue;
+            var a=Math.abs(ClipperLib.Clipper.Area(cpoly));
+            // Skip the board-outline polygon: large AND its boundary lies on the board edge.
+            // Using AND ensures a large interior polygon (e.g. inner isolation of a perimeter trace)
+            // is kept even though its area exceeds the 50% threshold.
+            if (a > 0.5 * boardArea && pathTouchesBoard(cpoly, boardClipPath, boardTouchTol)) continue;
             paths.push(fromClipper(cpoly)); added++;
         }
         if (added===0) break;
@@ -3165,11 +3168,11 @@ self.onmessage = function(e) {
             const boardTouchTol = Math.max(2, Math.round(0.002 * CLIPPER_SCALE));
             for (const cpoly of freeArea) {
                 if (cpoly.length < 3) continue;
-                // Skip the board/bbox outline: the largest outer polygon whose area is close
-                // to the full boundary area.  Everything smaller is a genuine mill path.
                 const a = Math.abs(ClipperLib.Clipper.Area(cpoly));
-                if (a > 0.5 * boardArea) continue;
-                if (usingRealBoard && pathTouchesBoardClipper(cpoly, boardClipPath, boardTouchTol)) continue;
+                // Skip the board-outline polygon: large AND its boundary lies on the board edge.
+                // Using AND ensures a large interior polygon (e.g. inner isolation of a perimeter trace)
+                // is kept even though its area exceeds the 50% threshold.
+                if (a > 0.5 * boardArea && pathTouchesBoardClipper(cpoly, boardClipPath, boardTouchTol)) continue;
                 paths.push(fromClipper(cpoly));
                 added++;
             }
