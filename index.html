@@ -554,6 +554,7 @@
         #preview.vcut-select { cursor: crosshair; }
         #preview.iso-select { cursor: crosshair; }
         #preview.edge-select { cursor: crosshair; }
+        #preview.edge-side { cursor: crosshair; }
         .preview-hint {
             position: absolute;
             left: 14px;
@@ -1132,6 +1133,8 @@
                 <button class="btn-secondary" id="edgeSelectAllBtn" style="flex:1">Select All</button>
                 <button class="btn-secondary" id="edgeDeselectAllBtn" style="flex:1">Deselect All</button>
             </div>
+            <button class="btn-tab-mode" id="edgeSideBtn" style="margin-top:8px;border-color:rgba(255,140,66,0.35);color:var(--accent-2)">+ Set Cut Direction on Canvas</button>
+            <div class="hint" style="margin-top:4px">Blue = outside cut (board perimeter) · Orange = inside cut (holes/cutouts). Defaults are set automatically on load.</div>
             <hr class="section-divider">
         </div>
 
@@ -1270,6 +1273,7 @@
                         <div class="tab-hint" id="vcutSelectHint" style="background:rgba(0,212,212,0.1);border-color:rgba(0,212,212,0.3);color:#00d4d4">Click a line or drag a box to select/deselect · click the button again to exit</div>
                         <div class="tab-hint" id="isoSelectHint" style="background:rgba(255,93,97,0.1);border-color:rgba(255,93,97,0.28);color:#ff8f92">Click a path or drag a box to select/deselect · click the button again to exit</div>
                         <div class="tab-hint" id="edgeSelectHint" style="background:rgba(116,180,255,0.1);border-color:rgba(116,180,255,0.28);color:#74b4ff">Click a contour or drag a box to select/deselect · click the button again to exit</div>
+                        <div class="tab-hint" id="edgeSideHint" style="background:rgba(255,140,66,0.1);border-color:rgba(255,140,66,0.3);color:#ff8c42">Click a contour to toggle inside/outside cut direction · blue = outside, orange = inside · click button again to exit</div>
                     </div>
                 </div>
             </section>
@@ -1309,6 +1313,8 @@
     let isoSelectMode = false;
     let edgeSelectedSet = new Set(); // indices of selected board contours
     let edgeSelectMode = false;
+    let edgeInsideSet  = new Set(); // indices of contours that are inside cuts (toolpath offset inward)
+    let edgeSideMode   = false;     // canvas mode: click to toggle inside/outside per contour
     let edgeContourToolpaths = []; // offset toolpath per parsed contour
     let depanelToolpaths = []; // cached offset contours per sub-board (for depanelization)
     let depanelMode    = false;
@@ -1408,6 +1414,8 @@
     const isoSelectHint   = document.getElementById('isoSelectHint');
     const edgeSelectBtn   = document.getElementById('edgeSelectBtn');
     const edgeSelectHint  = document.getElementById('edgeSelectHint');
+    const edgeSideBtn     = document.getElementById('edgeSideBtn');
+    const edgeSideHint    = document.getElementById('edgeSideHint');
     const tabModeBtn     = document.getElementById('tabModeBtn');
     const tabList        = document.getElementById('tabList');
     const tabHint        = document.getElementById('tabHint');
@@ -1724,7 +1732,9 @@
         toolpathLens = null;
         edgeContourToolpaths = [];
         edgeSelectedSet = new Set();
+        edgeInsideSet = new Set();
         edgeSelectMode = false;
+        edgeSideMode = false;
         depanelToolpaths = [];
         tabs = [];
         tabModeActive = false;
@@ -1734,9 +1744,11 @@
         dropZone.classList.remove('loaded');
         tabModeBtn.classList.remove('active');
         edgeSelectBtn.classList.remove('active');
-        canvas.classList.remove('tab-mode', 'edge-select');
+        edgeSideBtn.classList.remove('active');
+        canvas.classList.remove('tab-mode', 'edge-select', 'edge-side');
         tabHint.style.display = 'none';
         edgeSelectHint.style.display = 'none';
+        edgeSideHint.style.display = 'none';
         renderTabList();
         if (hasCopperLoaded()) rebuildIsolation();
         refreshUiState();
@@ -1865,11 +1877,19 @@
         edgeSelectHint.style.display = 'none';
     }
 
+    function disableEdgeSideMode() {
+        edgeSideMode = false;
+        edgeSideBtn.classList.remove('active');
+        canvas.classList.remove('edge-side');
+        edgeSideHint.style.display = 'none';
+    }
+
     function disableOtherInteractionModes(except) {
         if (except !== 'tab') disableTabMode();
         if (except !== 'vcut') disableVCutSelectMode();
         if (except !== 'iso') disableIsoSelectMode();
         if (except !== 'edge') disableEdgeSelectMode();
+        if (except !== 'edgeside') disableEdgeSideMode();
         if (except !== 'alignPin') disableAlignPinMode();
     }
 
@@ -2479,13 +2499,23 @@
             .map((contour, sortedIdx) => ({ contour, index: parsedContours.indexOf(contour), sortedIdx }))
             .slice(1)
             .filter(({ index }) => edgeSelectedSet.has(index))
-            .map(({ contour }) => offsetPolygon(contour, toolR));
+            .map(({ contour, index }) => edgeOffset(contour, toolR, edgeInsideSet.has(index)));
     }
 
     function buildEdgeContourToolpaths() {
         if (!parsedContours.length) return [];
         const toolR = parseFloat(document.getElementById('toolDiam').value) / 2;
-        return parsedContours.map(contour => offsetPolygon(contour, toolR));
+        return parsedContours.map((contour, i) => edgeOffset(contour, toolR, edgeInsideSet.has(i)));
+    }
+
+    function rebuildEdgeToolpaths() {
+        if (!outerContour) return;
+        const toolDiam = parseFloat(document.getElementById('toolDiam').value);
+        const outerIdx = getOuterContourIndex();
+        toolpath     = edgeOffset(outerContour, toolDiam / 2, edgeInsideSet.has(outerIdx));
+        toolpathLens = computeArcLengths(toolpath);
+        edgeContourToolpaths = buildEdgeContourToolpaths();
+        if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
     }
 
     // Nearest-neighbor sort for open line segments (bi-directional: each segment can be entered from either end).
@@ -2688,6 +2718,21 @@
         const expandedArea = Math.abs(signedArea(expanded));
         const shrunkenArea = Math.abs(signedArea(shrunken));
         return expandedArea >= originalArea || expandedArea >= shrunkenArea ? expanded : shrunken;
+    }
+
+    // Offset a polygon inward by distance d (opposite of offsetPolygon — picks the smaller result).
+    function offsetPolygonInward(points, d) {
+        if (Math.abs(d) < 0.0001) return points.map(p => ({ ...p }));
+        const expanded = offsetPolygonRaw(points, d);
+        const shrunken = offsetPolygonRaw(points, -d);
+        const expandedArea = Math.abs(signedArea(expanded));
+        const shrunkenArea = Math.abs(signedArea(shrunken));
+        return shrunkenArea <= expandedArea ? shrunken : expanded;
+    }
+
+    // Apply edge offset using explicit inside/outside direction.
+    function edgeOffset(points, r, inside = false) {
+        return inside ? offsetPolygonInward(points, r) : offsetPolygon(points, r);
     }
 
     // Return the contour with the largest absolute area (= board perimeter).
@@ -3282,7 +3327,7 @@ self.onmessage = function(e) {
         ctx.scale(viewScale, viewScale);
         const activeSelectLayer = vcutSelectMode ? 'vcut'
             : isoSelectMode ? 'iso'
-            : edgeSelectMode ? 'edge'
+            : (edgeSelectMode || edgeSideMode) ? 'edge'
             : null;
         const inactiveAlpha = 0.08;
         const withLayerFocus = (layer, draw) => {
@@ -3540,8 +3585,12 @@ self.onmessage = function(e) {
                     for (let i = 0; i < edgeContourToolpaths.length; i++) {
                         const tp = edgeContourToolpaths[i];
                         const isSelected = edgeSelectedSet.has(i);
-                        if (!isSelected && !edgeSelectMode) continue;
-                        drawPolyline(tp, isSelected ? '#74b4ff' : 'rgba(116,180,255,0.18)', 2.6);
+                        if (!isSelected && !edgeSelectMode && !edgeSideMode) continue;
+                        const isInside = edgeInsideSet.has(i);
+                        const color = isInside
+                            ? (isSelected ? '#ff8c42' : 'rgba(255,140,66,0.18)')
+                            : (isSelected ? '#74b4ff' : 'rgba(116,180,255,0.18)');
+                        drawPolyline(tp, color, 2.6);
                     }
                 }
             });
@@ -4698,9 +4747,12 @@ self.onmessage = function(e) {
                 boardBounds    = computeBounds(outerContour);
                 tabs           = [];
                 edgeSelectedSet = new Set(contours.map((_, i) => i));
+                // Default: outer contour = outside cut, inner contours = inside cuts (holes/cutouts)
+                edgeInsideSet = new Set(contours.map((_, i) => i).filter(i => contours[i] !== outerContour));
 
                 const toolDiam = parseFloat(document.getElementById('toolDiam').value);
-                toolpath     = offsetPolygon(outerContour, toolDiam / 2);
+                const outerIdx = contours.indexOf(outerContour);
+                toolpath     = edgeOffset(outerContour, toolDiam / 2, edgeInsideSet.has(outerIdx));
                 toolpathLens = computeArcLengths(toolpath);
                 edgeContourToolpaths = buildEdgeContourToolpaths();
                 if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
@@ -5440,6 +5492,7 @@ self.onmessage = function(e) {
             if (vcutSelectMode) return 'vcut';
             if (isoSelectMode) return 'iso';
             if (edgeSelectMode) return 'edge';
+            if (edgeSideMode) return 'edgeside';
             return null;
         }
 
@@ -5537,6 +5590,9 @@ self.onmessage = function(e) {
                             if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
                             updateEdgeSelectedDisplay();
                         }
+                    } else if (drag.layer === 'edgeside') {
+                        changed = applyBulkSelection(edgeInsideSet, collectClosedPathsInRect(edgeContourToolpaths, worldRect));
+                        if (changed) rebuildEdgeToolpaths();
                     }
                     if (changed) updateRuntimeEstimate();
                     drawPreview();
@@ -5571,6 +5627,15 @@ self.onmessage = function(e) {
                         updateEdgeSelectedDisplay();
                         changed = true;
                     }
+                } else if (drag.layer === 'edgeside' && edgeContourToolpaths.length) {
+                    const idx = nearestEdgeContour(x, y, threshold);
+                    if (idx >= 0) {
+                        if (edgeInsideSet.has(idx)) edgeInsideSet.delete(idx);
+                        else edgeInsideSet.add(idx);
+                        rebuildEdgeToolpaths();
+                        updateRuntimeEstimate();
+                        changed = true;
+                    }
                 }
                 if (changed) updateRuntimeEstimate();
                 drawPreview();
@@ -5601,12 +5666,7 @@ self.onmessage = function(e) {
 
     // Tool diameter change → rebuild contour toolpaths + depanel toolpaths + redraw
     document.getElementById('toolDiam').addEventListener('input', () => {
-        if (!outerContour) return;
-        const toolDiam = parseFloat(document.getElementById('toolDiam').value);
-        toolpath     = offsetPolygon(outerContour, toolDiam / 2);
-        toolpathLens = computeArcLengths(toolpath);
-        edgeContourToolpaths = buildEdgeContourToolpaths();
-        if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
+        rebuildEdgeToolpaths();
         updateRuntimeEstimate();
         drawPreview();
     });
@@ -5851,6 +5911,16 @@ self.onmessage = function(e) {
         if (depanelMode) depanelToolpaths = buildDepanelToolpaths();
         updateEdgeSelectedDisplay();
         updateRuntimeEstimate();
+        drawPreview();
+    });
+
+    edgeSideBtn.addEventListener('click', () => {
+        const next = !edgeSideMode;
+        disableOtherInteractionModes(next ? 'edgeside' : '');
+        edgeSideMode = next;
+        edgeSideBtn.classList.toggle('active', edgeSideMode);
+        canvas.classList.toggle('edge-side', edgeSideMode);
+        edgeSideHint.style.display = edgeSideMode ? 'block' : 'none';
         drawPreview();
     });
 
