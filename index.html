@@ -1484,8 +1484,8 @@
         hasEdge ? show(paramsSection) : hide(paramsSection);
         // Hide manual tabs when depanelize mode is active (auto-tabs used instead)
         (hasEdge && !depanelMode) ? show(tabsSection) : hide(tabsSection);
-        // Show isolation section when copper OR V-cuts are loaded (V-cuts need the V-bit settings)
-        (hasCopper || hasVCuts) ? show(isolationSection) : hide(isolationSection);
+        // Show isolation section when copper (front or back) OR V-cuts are loaded (V-cuts need the V-bit settings)
+        (hasCopper || hasBackCopper || hasVCuts) ? show(isolationSection) : hide(isolationSection);
         hasVCuts ? show(vcutSection) : hide(vcutSection);
         hasDrill ? show(drillSection) : hide(drillSection);
         hasAny ? show(machineSection) : hide(machineSection);
