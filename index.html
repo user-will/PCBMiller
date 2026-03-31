@@ -862,7 +862,11 @@
         <div id="isolationSection" class="rail-card hidden">
             <div class="section-step">Step 05</div>
             <h2>Isolation Routing</h2>
-            <div class="input-group">
+            <div class="side-toggle" style="margin-bottom:10px">
+                <label><input type="radio" name="isoToolType" id="isoToolVbit" value="vbit" checked><span>V-Bit</span></label>
+                <label><input type="radio" name="isoToolType" id="isoToolEndmill" value="endmill"><span>End Mill</span></label>
+            </div>
+            <div id="vbitAngleGroup" class="input-group">
                 <label>V-Bit Angle</label>
                 <div class="input-row">
                     <input type="number" id="vbitAngle" value="30" step="5" min="5" max="175">
@@ -871,12 +875,12 @@
                 <div class="hint">Included angle of your engraving bit (e.g. 30°, 45°, 60°, 90°)</div>
             </div>
             <div class="input-group">
-                <label>V-Bit Tip Diameter</label>
+                <label id="isoToolDiamLabel">V-Bit Tip Diameter</label>
                 <div class="input-row">
                     <input type="number" id="isoToolDiam" value="0.1" step="0.05" min="0.01" max="2">
                     <span class="unit">mm</span>
                 </div>
-                <div class="hint">Flat tip width — use 0 for a perfect point</div>
+                <div class="hint" id="isoToolDiamHint">Flat tip width — use 0 for a perfect point</div>
             </div>
             <div class="input-group">
                 <label>Isolation Width</label>
@@ -894,8 +898,10 @@
                 </div>
                 <div class="hint" id="isoDepthHint">0.035 mm = 1oz copper thickness</div>
             </div>
-            <canvas id="vbitPreview" width="240" height="148"></canvas>
-            <div class="info-row"><span class="info-label">V-bit cut width</span><span class="info-value" id="vbitCutWidth">—</span></div>
+            <div id="vbitPreviewGroup">
+                <canvas id="vbitPreview" width="240" height="148"></canvas>
+                <div class="info-row"><span class="info-label">V-bit cut width</span><span class="info-value" id="vbitCutWidth">—</span></div>
+            </div>
             <div class="input-group">
                 <label>Isolation Passes</label>
                 <div class="input-row">
@@ -938,7 +944,7 @@
         <!-- V-Cut Scoring Parameters (shown when V-cut file is loaded) -->
         <div id="vcutSection" class="rail-card hidden">
             <h2>V-Cut Scoring</h2>
-            <div class="hint" style="margin-bottom:8px">V-bit angle and tip diameter are set in Isolation Routing above</div>
+            <div class="hint" style="margin-bottom:8px" id="vcutIsoHint">V-bit angle and tip diameter are set in Isolation Routing above</div>
             <div class="input-group">
                 <label>Board Thickness</label>
                 <div class="input-row">
@@ -3005,7 +3011,7 @@ self.onmessage = function(e) {
         const numPasses  = parseInt(document.getElementById('isoPasses').value) || 2;
         const overlapPct = parseFloat(document.getElementById('isoOverlap').value) || 50;
         const stepover   = toolDiam * (1 - overlapPct / 100);
-        const vbitAngle  = parseFloat(document.getElementById('vbitAngle').value) || 0;
+        const vbitAngle  = isEndMillMode() ? 0 : (parseFloat(document.getElementById('vbitAngle').value) || 0);
         const isoDepth   = parseFloat(document.getElementById('isoDepth').value) || 0;
         const extraRadius = (vbitAngle > 0 && vbitAngle < 180) ? Math.abs(isoDepth) * Math.tan((vbitAngle / 2) * (Math.PI / 180)) : 0;
 
@@ -4509,8 +4515,10 @@ self.onmessage = function(e) {
             return tc;
         }
 
-        // V-cuts and isolation routing share the same V-bit — no tool change between them.
-        const isoTool   = `V-bit (${vbitAngle}° angle, ${isoToolDiam} mm tip) — isolation routing / V-cut scoring`;
+        // V-cuts and isolation routing share the same tool — no tool change between them.
+        const isoTool = isEndMillMode()
+            ? `End mill (${isoToolDiam} mm) — isolation routing / V-cut scoring`
+            : `V-bit (${vbitAngle}° angle, ${isoToolDiam} mm tip) — isolation routing / V-cut scoring`;
         const drillTool = `Drill bits (${drillBitSizes.join(', ')} mm) — drilling`;
         const edgeTool  = `End mill (${toolDiam} mm) — board outline / depanelization`;
 
@@ -5078,7 +5086,7 @@ self.onmessage = function(e) {
 
     function drawVbitPreview() {
         const el = document.getElementById('vbitPreview');
-        if (!el) return;
+        if (!el || isEndMillMode()) return;
         const ctx = el.getContext('2d');
         const CW = el.width, CH = el.height;
 
@@ -5253,6 +5261,22 @@ self.onmessage = function(e) {
         ctx.fillText(`${angle.toFixed(0)}°`, cx, tipY - arcRadius - 8);
     }
 
+    function isEndMillMode() {
+        return document.getElementById('isoToolEndmill')?.checked;
+    }
+
+    function applyIsoToolTypeUi() {
+        const endmill = isEndMillMode();
+        document.getElementById('vbitAngleGroup').style.display    = endmill ? 'none' : '';
+        document.getElementById('vbitPreviewGroup').style.display  = endmill ? 'none' : '';
+        document.getElementById('isoToolDiamLabel').textContent    = endmill ? 'End Mill Diameter' : 'V-Bit Tip Diameter';
+        document.getElementById('isoToolDiamHint').textContent     = endmill ? 'Diameter of the end mill cutter' : 'Flat tip width — use 0 for a perfect point';
+        const vcutHint = document.getElementById('vcutIsoHint');
+        if (vcutHint) vcutHint.textContent = endmill
+            ? 'End mill diameter is set in Isolation Routing above'
+            : 'V-bit angle and tip diameter are set in Isolation Routing above';
+    }
+
     // Calculate cut width at a given depth for the current V-bit angle and tip diameter.
     function isoCalcCutWidth(depth, angle, tipDiam) {
         if (!angle || angle <= 0 || angle >= 180) return null;
@@ -5261,18 +5285,23 @@ self.onmessage = function(e) {
 
     // Update the depth hint to show the actual cut width produced at the current depth.
     function updateIsoDepthHint() {
-        const angle   = parseFloat(document.getElementById('vbitAngle').value);
-        const depth   = parseFloat(document.getElementById('isoDepth').value) || 0.05;
-        const tipDiam = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
         const hint    = document.getElementById('isoDepthHint');
         if (!hint) return;
-        const w = isoCalcCutWidth(depth, angle, tipDiam);
-        if (w == null) {
-            hint.textContent = '0.035 mm = 1oz copper thickness';
+        const toolDiam = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
+        if (isEndMillMode()) {
+            hint.textContent = `End mill cuts constant ${toolDiam.toFixed(3)} mm width  ·  0.035 mm = 1oz copper`;
             document.getElementById('vbitCutWidth').textContent = '—';
         } else {
-            hint.textContent = `Cut width at this depth: ${w.toFixed(3)} mm  ·  0.035 mm = 1oz copper`;
-            document.getElementById('vbitCutWidth').textContent = `${w.toFixed(3)} mm`;
+            const angle = parseFloat(document.getElementById('vbitAngle').value);
+            const depth = parseFloat(document.getElementById('isoDepth').value) || 0.05;
+            const w = isoCalcCutWidth(depth, angle, toolDiam);
+            if (w == null) {
+                hint.textContent = '0.035 mm = 1oz copper thickness';
+                document.getElementById('vbitCutWidth').textContent = '—';
+            } else {
+                hint.textContent = `Cut width at this depth: ${w.toFixed(3)} mm  ·  0.035 mm = 1oz copper`;
+                document.getElementById('vbitCutWidth').textContent = `${w.toFixed(3)} mm`;
+            }
         }
         drawVbitPreview();
         scheduleRedraw();
@@ -5298,7 +5327,7 @@ self.onmessage = function(e) {
                     isoWidth:  parseFloat(document.getElementById('isoWidth').value) || 0.2,
                     numPasses: parseInt(document.getElementById('isoPasses').value) || 2,
                     stepover:  toolDiam * (1 - overlapPct / 100),
-                    vbitAngle: parseFloat(document.getElementById('vbitAngle').value) || 0,
+                    vbitAngle: isEndMillMode() ? 0 : (parseFloat(document.getElementById('vbitAngle').value) || 0),
                     isoDepth:  parseFloat(document.getElementById('isoDepth').value) || 0,
                 },
             });
@@ -5324,7 +5353,7 @@ self.onmessage = function(e) {
                     isoWidth:  parseFloat(document.getElementById('isoWidth').value) || 0.2,
                     numPasses: parseInt(document.getElementById('isoPasses').value) || 2,
                     stepover:  toolDiam * (1 - overlapPct / 100),
-                    vbitAngle: parseFloat(document.getElementById('vbitAngle').value) || 0,
+                    vbitAngle: isEndMillMode() ? 0 : (parseFloat(document.getElementById('vbitAngle').value) || 0),
                     isoDepth:  parseFloat(document.getElementById('isoDepth').value) || 0,
                 },
             });
@@ -5897,6 +5926,16 @@ self.onmessage = function(e) {
         if (twoLayerMode && hasBackCopperLoaded()) rebuildIsolationBack();
     });
 
+    // Tool type toggle (V-bit ↔ End mill)
+    document.querySelectorAll('input[name="isoToolType"]').forEach(el => {
+        el.addEventListener('change', () => {
+            applyIsoToolTypeUi();
+            updateIsoDepthHint();
+            rebuildIsolation();
+            if (twoLayerMode && hasBackCopperLoaded()) rebuildIsolationBack();
+        });
+    });
+
     // isoWidth / isoToolDiam → rebuild toolpaths
     ['isoWidth', 'isoToolDiam'].forEach(id => {
         document.getElementById(id).addEventListener('input', () => {
@@ -5934,6 +5973,7 @@ self.onmessage = function(e) {
     new ResizeObserver(resizeCanvas).observe(canvas.parentElement);
     resizeCanvas();
     initCanvasInteraction();
+    applyIsoToolTypeUi();
     refreshUiState();
     updateIsoDepthHint();
 
