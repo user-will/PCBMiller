@@ -568,6 +568,42 @@
             text-transform: uppercase;
             letter-spacing: 0.08em;
         }
+        .computing-overlay {
+            position: absolute;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .computing-overlay.visible { display: flex; }
+        .computing-overlay-inner {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+            background: rgba(6, 10, 12, 0.78);
+            border: 1px solid rgba(255, 140, 66, 0.28);
+            border-radius: 18px;
+            padding: 24px 36px;
+            backdrop-filter: blur(6px);
+        }
+        .computing-spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid rgba(255, 140, 66, 0.18);
+            border-top-color: var(--accent-2);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .computing-overlay-label {
+            font-size: 0.72rem;
+            color: var(--accent-2);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
         .tab-hint {
             position: absolute;
             top: 14px;
@@ -1217,6 +1253,12 @@
                     </div>
                     <div class="preview">
                         <canvas id="preview"></canvas>
+                        <div class="computing-overlay" id="computingOverlay">
+                            <div class="computing-overlay-inner">
+                                <div class="computing-spinner"></div>
+                                <div class="computing-overlay-label">Computing paths…</div>
+                            </div>
+                        </div>
                         <div class="preview-hint" id="previewHint">Scroll to zoom · Drag to pan</div>
                         <div class="tab-hint" id="tabHint">Click on the red toolpath to place a tab · click the button again to exit</div>
                         <div class="tab-hint" id="vcutSelectHint" style="background:rgba(0,212,212,0.1);border-color:rgba(0,212,212,0.3);color:#00d4d4">Click a line or drag a box to select/deselect · click the button again to exit</div>
@@ -2734,6 +2776,8 @@ function pathTouchesBoard(poly, boardPath, tol) {
 }
 function buildIsolationToolpaths(segments, flashes, regions, params, boardOutline) {
     var toolDiam=params.toolDiam, isoWidth=params.isoWidth, numPasses=params.numPasses, stepover=params.stepover;
+    var vbitAngle=params.vbitAngle||0, isoDepth=params.isoDepth||0;
+    var extraRadius = (vbitAngle > 0 && vbitAngle < 180) ? Math.abs(isoDepth) * Math.tan((vbitAngle / 2) * (Math.PI / 180)) : 0;
     var copperPolys = [];
     for (var i=0;i<segments.length;i++) { var s=segments[i]; if (s.r>0) copperPolys.push(toClipper(stadiumBuffer(s.x1,s.y1,s.x2,s.y2,s.r))); }
     for (var i=0;i<flashes.length;i++) { var f=flashes[i]; copperPolys.push(toClipper(flashBuffer(f.x,f.y,f.ap,0))); }
@@ -2767,7 +2811,7 @@ function buildIsolationToolpaths(segments, flashes, regions, params, boardOutlin
     if (boardClipPath) boardArea = Math.abs(ClipperLib.Clipper.Area(boardClipPath));
     var paths = [];
     for (var p=0; p<numPasses; p++) {
-        var expandBy = toolDiam/2 + isoWidth + p*stepover;
+        var expandBy = toolDiam/2 + extraRadius + isoWidth + p*stepover;
         var co = new ClipperLib.ClipperOffset(2.0, CLIPPER_ARC_TOL);
         co.AddPaths(united, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
         var expanded = new ClipperLib.Paths();
@@ -2817,6 +2861,7 @@ self.onmessage = function(e) {
                 updateIsoSelectedDisplay();
             }
             document.getElementById('isoComputingMsg').style.display = 'none';
+            document.getElementById('computingOverlay').classList.remove('visible');
             refreshUiState();
             drawPreview();
         };
@@ -2960,6 +3005,9 @@ self.onmessage = function(e) {
         const numPasses  = parseInt(document.getElementById('isoPasses').value) || 2;
         const overlapPct = parseFloat(document.getElementById('isoOverlap').value) || 50;
         const stepover   = toolDiam * (1 - overlapPct / 100);
+        const vbitAngle  = parseFloat(document.getElementById('vbitAngle').value) || 0;
+        const isoDepth   = parseFloat(document.getElementById('isoDepth').value) || 0;
+        const extraRadius = (vbitAngle > 0 && vbitAngle < 180) ? Math.abs(isoDepth) * Math.tan((vbitAngle / 2) * (Math.PI / 180)) : 0;
 
         // Step 1 — convert all copper to Clipper polygons (the bare copper shape, no clearance yet).
         const copperPolys = [];
@@ -3041,7 +3089,7 @@ self.onmessage = function(e) {
 
         const paths = [];
         for (let p = 0; p < numPasses; p++) {
-            const expandBy = toolDiam / 2 + isoWidth + p * stepover;
+            const expandBy = toolDiam / 2 + extraRadius + isoWidth + p * stepover;
             const co = new ClipperLib.ClipperOffset(2.0, CLIPPER_ARC_TOL);
             co.AddPaths(united, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
             const expanded = new ClipperLib.Paths();
@@ -4727,7 +4775,7 @@ self.onmessage = function(e) {
                 show(isolationSection);
                 show(machineSection);
                 show(outputModeSection);
-                updateIsoDepthFromAngle();
+                updateIsoDepthHint();
                 if (!boardBounds) show(infoSection);
                 generateBtn.disabled = false;
 
@@ -5231,24 +5279,11 @@ self.onmessage = function(e) {
         updateRuntimeEstimate();
     }
 
-    // Auto-calculate the required depth from angle + isolation width + tip diameter.
-    function updateIsoDepthFromAngle() {
-        const angle    = parseFloat(document.getElementById('vbitAngle').value);
-        const isoWidth = parseFloat(document.getElementById('isoWidth').value) || 0.2;
-        const tipDiam  = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
-        if (!angle || angle <= 0 || angle >= 180) return;
-        const tanHalf = Math.tan((angle / 2) * (Math.PI / 180));
-        if (tanHalf <= 0) return;
-        let depth = (isoWidth - tipDiam) / (2 * tanHalf);
-        if (depth < 0.005) depth = 0.005;
-        document.getElementById('isoDepth').value = depth.toFixed(3);
-        updateIsoDepthHint();
-    }
-
     function rebuildIsolation() {
         if (!copperSegments.length && !copperFlashes.length && !copperRegions.length) return;
         clearTimeout(_isoDebounceTimer);
         document.getElementById('isoComputingMsg').style.display = 'block';
+        document.getElementById('computingOverlay').classList.add('visible');
         _isoDebounceTimer = setTimeout(() => {
             const toolDiam   = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
             const overlapPct = parseFloat(document.getElementById('isoOverlap').value) || 50;
@@ -5263,6 +5298,8 @@ self.onmessage = function(e) {
                     isoWidth:  parseFloat(document.getElementById('isoWidth').value) || 0.2,
                     numPasses: parseInt(document.getElementById('isoPasses').value) || 2,
                     stepover:  toolDiam * (1 - overlapPct / 100),
+                    vbitAngle: parseFloat(document.getElementById('vbitAngle').value) || 0,
+                    isoDepth:  parseFloat(document.getElementById('isoDepth').value) || 0,
                 },
             });
         }, 350);
@@ -5272,6 +5309,7 @@ self.onmessage = function(e) {
         if (!backCopperSegments.length && !backCopperFlashes.length && !backCopperRegions.length) return;
         clearTimeout(_isoDebounceTimer);
         document.getElementById('isoComputingMsg').style.display = 'block';
+        document.getElementById('computingOverlay').classList.add('visible');
         _isoDebounceTimer = setTimeout(() => {
             const toolDiam   = parseFloat(document.getElementById('isoToolDiam').value) || 0.1;
             const overlapPct = parseFloat(document.getElementById('isoOverlap').value) || 50;
@@ -5286,6 +5324,8 @@ self.onmessage = function(e) {
                     isoWidth:  parseFloat(document.getElementById('isoWidth').value) || 0.2,
                     numPasses: parseInt(document.getElementById('isoPasses').value) || 2,
                     stepover:  toolDiam * (1 - overlapPct / 100),
+                    vbitAngle: parseFloat(document.getElementById('vbitAngle').value) || 0,
+                    isoDepth:  parseFloat(document.getElementById('isoDepth').value) || 0,
                 },
             });
         }, 350);
@@ -5857,17 +5897,21 @@ self.onmessage = function(e) {
         if (twoLayerMode && hasBackCopperLoaded()) rebuildIsolationBack();
     });
 
-    // isoWidth / isoToolDiam → recalc depth from angle (if set), then rebuild
+    // isoWidth / isoToolDiam → rebuild toolpaths
     ['isoWidth', 'isoToolDiam'].forEach(id => {
         document.getElementById(id).addEventListener('input', () => {
-            updateIsoDepthFromAngle();
+            updateIsoDepthHint();
             rebuildIsolation();
             if (twoLayerMode && hasBackCopperLoaded()) rebuildIsolationBack();
         });
     });
 
-    // Manual depth override → just update the cut-width hint
-    document.getElementById('isoDepth').addEventListener('input', updateIsoDepthHint);
+    // Depth change → update cut-width hint and rebuild paths (depth affects cut width for V-bits)
+    document.getElementById('isoDepth').addEventListener('input', () => {
+        updateIsoDepthHint();
+        rebuildIsolation();
+        if (twoLayerMode && hasBackCopperLoaded()) rebuildIsolationBack();
+    });
 
     // Isolation parameter changes → rebuild toolpaths (both sides)
     ['isoPasses', 'isoOverlap'].forEach(id => {
