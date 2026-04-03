@@ -1135,6 +1135,13 @@
             </div>
             <button class="btn-tab-mode" id="edgeSideBtn" style="margin-top:8px;border-color:rgba(255,140,66,0.35);color:var(--accent-2)">+ Set Cut Direction on Canvas</button>
             <div class="hint" style="margin-top:4px">Blue = outside cut (board perimeter) · Orange = inside cut (holes/cutouts). Defaults are set automatically on load.</div>
+            <div class="input-group" style="margin-top:8px">
+                <label class="toggle-label">
+                    <input type="checkbox" id="edgeOnBackSide">
+                    <span>Cut outline on back side (mirrored)</span>
+                </label>
+                <div class="hint">For through-hole boards: flip board after isolation and cut the outline from the back side. Mirrors X coordinates.</div>
+            </div>
             <hr class="section-divider">
         </div>
 
@@ -1414,8 +1421,9 @@
     const isoSelectHint   = document.getElementById('isoSelectHint');
     const edgeSelectBtn   = document.getElementById('edgeSelectBtn');
     const edgeSelectHint  = document.getElementById('edgeSelectHint');
-    const edgeSideBtn     = document.getElementById('edgeSideBtn');
-    const edgeSideHint    = document.getElementById('edgeSideHint');
+    const edgeSideBtn       = document.getElementById('edgeSideBtn');
+    const edgeSideHint      = document.getElementById('edgeSideHint');
+    const edgeOnBackSideEl  = document.getElementById('edgeOnBackSide');
     const tabModeBtn     = document.getElementById('tabModeBtn');
     const tabList        = document.getElementById('tabList');
     const tabHint        = document.getElementById('tabHint');
@@ -1527,7 +1535,7 @@
         const showAlignPins = twoLayerMode && hasBackCopper;
         alignPinsSection ? alignPinsSection.classList.toggle('hidden', !showAlignPins) : null;
         sideViewSection  ? sideViewSection.classList.toggle('hidden', !twoLayerMode) : null;
-        drillSideGroup   ? drillSideGroup.classList.toggle('hidden', !twoLayerMode) : null;
+        drillSideGroup   ? drillSideGroup.classList.toggle('hidden', !hasDrill) : null;
 
         // Legend chips for two-layer
         const legendBackCu   = document.getElementById('legendBackCu');
@@ -4124,7 +4132,7 @@ self.onmessage = function(e) {
         });
     }
 
-    function findOptimizedStartLen(intervals = []) {
+    function findOptimizedStartLen(intervals = [], transform = toGC) {
         if (!toolpathLens || toolpathLens.length < 2) return 0;
         const total = toolpathLens[toolpathLens.length - 1];
         if (total <= 0) return 0;
@@ -4133,7 +4141,7 @@ self.onmessage = function(e) {
         let bestDist = Infinity;
         for (let len = 0; len < total; len += STEP) {
             if (intervals.length && isLengthInsideTabs(len, intervals, total)) continue;
-            const pt = toGC(pointAtLength(len));
+            const pt = transform(pointAtLength(len));
             const dist = pt.x * pt.x + pt.y * pt.y;
             if (dist < bestDist) {
                 bestDist = dist;
@@ -4143,7 +4151,7 @@ self.onmessage = function(e) {
         return bestLen;
     }
 
-    function rotateToolpathToStartLen(startLen) {
+    function rotateToolpathToStartLen(startLen, transform = toGC) {
         if (!toolpath || !toolpath.length) return [];
         const startPt = pointAtLength(startLen);
         let bestIdx = 0;
@@ -4157,7 +4165,7 @@ self.onmessage = function(e) {
                 bestIdx = i;
             }
         }
-        return rotateClosedPath(toolpath, bestIdx).map(toGC);
+        return rotateClosedPath(toolpath, bestIdx).map(transform);
     }
 
     // Emit G-code for V-cut score lines. depth is negative (e.g. -0.3).
@@ -4289,13 +4297,13 @@ self.onmessage = function(e) {
 
     // Emit G-code lines for one full pass around the contour at depth passZ.
     // useTabs = true only on passes where we actually want gaps (typically the final pass).
-    function emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f) {
+    function emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f, transform = toGC) {
         const total = toolpathLens[toolpathLens.length - 1];
         const STEP = 0.3;
 
         if (!useTabs || !tabs.length) {
-            const startLen = findOptimizedStartLen();
-            const loop = rotateToolpathToStartLen(startLen);
+            const startLen = findOptimizedStartLen([], transform);
+            const loop = rotateToolpathToStartLen(startLen, transform);
             const start = loop[0];
             lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
             lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
@@ -4306,8 +4314,8 @@ self.onmessage = function(e) {
             lines.push(`G1 X${f(start.x)} Y${f(start.y)} F${feedRate}  ; close`);
         } else {
             const intervals = buildTabIntervals();
-            const startLen  = findOptimizedStartLen(intervals);
-            const startPt   = toGC(pointAtLength(startLen));
+            const startLen  = findOptimizedStartLen(intervals, transform);
+            const startPt   = transform(pointAtLength(startLen));
 
             lines.push(`G0 X${f(startPt.x)} Y${f(startPt.y)}`);
             lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
@@ -4319,7 +4327,7 @@ self.onmessage = function(e) {
                 const step = Math.min(STEP, total - walked);
                 walked += step;
                 const len = ((startLen + walked) % total + total) % total;
-                const pt  = toGC(pointAtLength(len));
+                const pt  = transform(pointAtLength(len));
 
                 // Is this arc-length inside any tab?
                 const absLen = (startLen + walked) % total;
@@ -4347,13 +4355,13 @@ self.onmessage = function(e) {
         lines.push(...optimizeMotionOutput(optimized));
     }
 
-    function emitClosedPathPassLines(lines, path, passZ, safeZ, feedRate, plungeRate, f) {
+    function emitClosedPathPassLines(lines, path, passZ, safeZ, feedRate, plungeRate, f, transform = toGC) {
         if (!path || path.length < 2) return;
-        const start = toGC(path[0]);
+        const start = transform(path[0]);
         lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
         lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
         for (let i = 1; i < path.length; i++) {
-            const pt = toGC(path[i]);
+            const pt = transform(path[i]);
             lines.push(`G1 X${f(pt.x)} Y${f(pt.y)} F${feedRate}`);
         }
         lines.push(`G1 X${f(start.x)} Y${f(start.y)} F${feedRate}  ; close`);
@@ -4427,7 +4435,8 @@ self.onmessage = function(e) {
             drillDepth    = -drillDepthUi;
             drillFeedRate = parseInt(document.getElementById('drillFeedRate').value);
         }
-        const drillOnBackSide = twoLayerMode && !!drillOnBackSideEl?.checked;
+        const drillOnBackSide = !!drillOnBackSideEl?.checked;
+        const edgeCutsOnBack  = !!edgeOnBackSideEl?.checked;
 
         // Edge cut params (used for both normal edge cuts and depanelization)
         let cutDepthUi = 0, passDepth = 0.5, feedRate = 300, tabLayers = 1, toolDiam = '?', passes = [];
@@ -4486,16 +4495,17 @@ self.onmessage = function(e) {
             emitDepanelLines(depanelLines, activeDepanelToolpaths, passes, safeZ, feedRate, plungeRate, tabLayers, depanelAutoTabCount, depanelTabWidth, f);
         }
 
+        const edgeTransform = edgeCutsOnBack ? toGCBack : toGC;
         const edgeLines = [];
         if (hasEdgeCuts) {
             edgeLines.push('');
-            edgeLines.push('; === EDGE CUTS ===');
+            edgeLines.push(`; === EDGE CUTS${edgeCutsOnBack ? ' (back side, mirrored X)' : ''} ===`);
             if (selectedOuterToolpath) {
                 passes.forEach((passZ, i) => {
                     const useTabs = tabs.length > 0 && i >= passes.length - tabLayers;
                     edgeLines.push('');
                     edgeLines.push(`; --- Outer contour pass ${i + 1}/${passes.length}: Z${f(passZ)}${useTabs ? ' (tabs)' : ''} ---`);
-                    emitPassLines(edgeLines, passZ, safeZ, feedRate, plungeRate, useTabs, f);
+                    emitPassLines(edgeLines, passZ, safeZ, feedRate, plungeRate, useTabs, f, edgeTransform);
                 });
             }
             selectedInnerEdgeToolpaths.forEach((path, contourIdx) => {
@@ -4504,7 +4514,7 @@ self.onmessage = function(e) {
                 passes.forEach((passZ, passIdx) => {
                     edgeLines.push('');
                     edgeLines.push(`; Pass ${passIdx + 1}/${passes.length}: Z${f(passZ)}`);
-                    emitClosedPathPassLines(edgeLines, path, passZ, safeZ, feedRate, plungeRate, f);
+                    emitClosedPathPassLines(edgeLines, path, passZ, safeZ, feedRate, plungeRate, f, edgeTransform);
                 });
             });
         }
@@ -4672,7 +4682,11 @@ self.onmessage = function(e) {
 
             gcodeTraces    = hasIsolation ? buildSectionFile('Isolation Routing', isolationLines) : '';
             gcodeVCuts     = hasVCuts     ? buildSectionFile('V-Cut Scoring',     vcutLines)      : '';
-            gcodeDrill     = drillLines.length ? buildSectionFile('Drilling', drillLines) : '';
+            gcodeDrill     = drillLines.length
+                ? buildSectionFile('Drilling', drillLines)
+                : backDrillLines.length
+                    ? buildSectionFile('Drilling — Back Side', backDrillLines)
+                    : '';
             gcodeDepanel   = hasDepanel   ? buildSectionFile('Depanelization',     depanelLines)   : '';
             gcodeOutline   = hasEdgeCuts  ? buildSectionFile('Board Outline',      edgeLines)      : '';
             gcodeVCutsBack = (!twoLayerMode && hasBackVCuts)
@@ -6036,7 +6050,7 @@ self.onmessage = function(e) {
     [
         'safeZ', 'plungeRate', 'spindleRpm', 'spindleDelay',
         'drillDepth', 'drillFeedRate', 'feedRate', 'cutDepth', 'passDepth', 'tabWidth', 'tabLayers',
-        'isoFeedRate', 'isoDepth', 'drillOnBackSide'
+        'isoFeedRate', 'isoDepth', 'drillOnBackSide', 'edgeOnBackSide'
     ].forEach(id => document.getElementById(id).addEventListener('input', updateRuntimeEstimate));
 
     // =========================================================
