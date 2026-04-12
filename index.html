@@ -1092,6 +1092,14 @@
                 <div class="hint">Depth removed per pass — set equal to Cut Depth for single pass</div>
             </div>
             <div class="input-group">
+                <label>First Pass Depth</label>
+                <div class="input-row">
+                    <input type="number" id="firstPassDepth" value="0" step="0.05" min="0" max="10">
+                    <span class="unit">mm</span>
+                </div>
+                <div class="hint">Shallower first pass to score the surface — 0 to disable</div>
+            </div>
+            <div class="input-group">
                 <label>Feed Rate</label>
                 <div class="input-row">
                     <input type="number" id="feedRate" value="200" step="10" min="1" max="1000">
@@ -1490,12 +1498,19 @@
     }
 
     // Build the array of Z depths for each pass from positive UI depths.
-    // Example: cutDepth=1.25 and passDepth=0.5 => [-0.5, -1.0, -1.25].
-    function buildPasses(cutDepth, passDepth) {
+    // Example: cutDepth=1.25, passDepth=0.5 => [-0.5, -1.0, -1.25].
+    // firstPassDepth > 0 inserts a shallower first pass before regular passes.
+    // Example: cutDepth=1.6, passDepth=0.8, firstPassDepth=0.3 => [-0.3, -0.8, -1.6].
+    function buildPasses(cutDepth, passDepth, firstPassDepth = 0) {
         const passes = [];
-        if (passDepth > 0 && passDepth < cutDepth) {
-            for (let z = -passDepth; z > -cutDepth + 0.0001; z -= passDepth) {
-                passes.push(parseFloat(z.toFixed(4)));
+        let startZ = 0;
+        if (firstPassDepth > 0 && firstPassDepth < cutDepth) {
+            passes.push(parseFloat((-firstPassDepth).toFixed(4)));
+            startZ = firstPassDepth;
+        }
+        if (passDepth > 0 && startZ + passDepth < cutDepth - 0.0001) {
+            for (let z = startZ + passDepth; z < cutDepth - 0.0001; z += passDepth) {
+                passes.push(parseFloat((-z).toFixed(4)));
             }
         }
         passes.push(-cutDepth);
@@ -1503,10 +1518,11 @@
     }
 
     function updatePassCount() {
-        const cutDepth  = parseFloat(document.getElementById('cutDepth').value);
-        const passDepth = parseFloat(document.getElementById('passDepth').value);
+        const cutDepth       = parseFloat(document.getElementById('cutDepth').value);
+        const passDepth      = parseFloat(document.getElementById('passDepth').value);
+        const firstPassDepth = parseFloat(document.getElementById('firstPassDepth').value) || 0;
         if (!infoPasses || isNaN(cutDepth) || isNaN(passDepth) || passDepth <= 0) return;
-        const count = buildPasses(cutDepth, passDepth).length;
+        const count = buildPasses(cutDepth, passDepth, firstPassDepth).length;
         infoPasses.textContent = count + (count === 1 ? ' pass' : ' passes');
         updateRuntimeEstimate();
     }
@@ -4438,7 +4454,8 @@ self.onmessage = function(e) {
             feedRate   = parseInt(document.getElementById('feedRate').value);
             tabLayers  = Math.max(1, parseInt(document.getElementById('tabLayers').value) || 1);
             toolDiam   = document.getElementById('toolDiam').value;
-            passes     = buildPasses(cutDepthUi, passDepth);
+            const firstPassDepth = parseFloat(document.getElementById('firstPassDepth').value) || 0;
+            passes     = buildPasses(cutDepthUi, passDepth, firstPassDepth);
         }
 
         // V-cut params
@@ -5677,6 +5694,7 @@ self.onmessage = function(e) {
     // Cut depth / pass depth change → update pass count display
     document.getElementById('cutDepth').addEventListener('input', updatePassCount);
     document.getElementById('passDepth').addEventListener('input', updatePassCount);
+    document.getElementById('firstPassDepth').addEventListener('input', updatePassCount);
 
     function updateTabHint() {
         const cutDepth  = parseFloat(document.getElementById('cutDepth').value);
