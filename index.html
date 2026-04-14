@@ -939,6 +939,12 @@
                 <button class="btn-secondary" id="isoSelectAllBtn" style="flex:1">Select All</button>
                 <button class="btn-secondary" id="isoDeselectAllBtn" style="flex:1">Deselect All</button>
             </div>
+            <div class="info-row" style="margin-top:10px">
+                <span class="info-label">Excluded fills</span>
+                <span class="info-value" id="infoExcludedFills">0</span>
+            </div>
+            <button class="btn-tab-mode" id="isoExcludeBtn">⊘ Exclude Copper Fills</button>
+            <div class="hint" id="isoExcludeHint" style="display:none;background:rgba(255,140,66,0.1);border:1px solid rgba(255,140,66,0.3);border-radius:8px;padding:6px 8px;margin-top:6px;color:#ff8c42">Hover to highlight a fill · click to exclude/include it · click button again to exit</div>
             <hr class="section-divider">
         </div>
 
@@ -1338,6 +1344,10 @@
     let backCopperBounds    = null;
     let backIsoSelectedSet  = new Set();
     let twoLayerMode        = false;
+    let excludedRegionSet     = new Set(); // copperRegions indices excluded from isolation routing
+    let excludedBackRegionSet = new Set(); // backCopperRegions indices excluded
+    let copperExcludeMode   = false;
+    let hoveredRegionIndex  = -1; // copper region index under cursor in exclude mode
     let previewSide         = 'front'; // 'front' | 'both' | 'back'
     let alignmentPins       = []; // [{x, y}] canvas coords
     let alignPinMode        = false;
@@ -1609,6 +1619,7 @@
         headerIsoPaths.textContent = hasCopper ? String(isoTotal) : '—';
         headerDrillCount.textContent = hasDrill ? String(drillHoles.length) : '—';
         updateIsoSelectedDisplay();
+        updateExcludedFillsDisplay();
         updateEdgeSelectedDisplay();
         updateRuntimeEstimate();
     }
@@ -1778,6 +1789,7 @@
         copperRegions = [];
         copperToolpaths = [];
         isoSelectedSet = new Set();
+        excludedRegionSet = new Set();
         isoSelectMode = false;
         copperBounds = null;
         copperFilenameEl.textContent = '';
@@ -1863,6 +1875,11 @@
             : '—';
     }
 
+    function updateExcludedFillsDisplay() {
+        const total = excludedRegionSet.size + (twoLayerMode ? excludedBackRegionSet.size : 0);
+        document.getElementById('infoExcludedFills').textContent = total || '0';
+    }
+
     function updateEdgeSelectedDisplay() {
         document.getElementById('infoEdgeContours').textContent = parsedContours.length ? parsedContours.length : '—';
         document.getElementById('infoEdgeSelected').textContent = parsedContours.length
@@ -1905,6 +1922,15 @@
         edgeSideHint.style.display = 'none';
     }
 
+    function disableCopperExcludeMode() {
+        copperExcludeMode = false;
+        hoveredRegionIndex = -1;
+        const btn = document.getElementById('isoExcludeBtn');
+        if (btn) btn.classList.remove('active');
+        const hint = document.getElementById('isoExcludeHint');
+        if (hint) hint.style.display = 'none';
+    }
+
     function disableOtherInteractionModes(except) {
         if (except !== 'tab') disableTabMode();
         if (except !== 'vcut') disableVCutSelectMode();
@@ -1912,6 +1938,7 @@
         if (except !== 'edge') disableEdgeSelectMode();
         if (except !== 'edgeside') disableEdgeSideMode();
         if (except !== 'alignPin') disableAlignPinMode();
+        if (except !== 'isoExclude') disableCopperExcludeMode();
     }
 
     // =========================================================
@@ -2605,6 +2632,27 @@
 
     function nearestIsoPath(wx, wy, threshold) {
         return nearestClosedPathIndex(copperToolpaths, wx, wy, threshold);
+    }
+
+    // Point-in-polygon (ray casting) — works for convex and non-convex polygons.
+    function regionContainsPoint(region, x, y) {
+        let inside = false;
+        for (let i = 0, j = region.length - 1; i < region.length; j = i++) {
+            const xi = region[i].x, yi = region[i].y;
+            const xj = region[j].x, yj = region[j].y;
+            if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    // Return the index of the topmost copper region containing (x, y), or -1.
+    function findRegionAtPoint(regions, x, y) {
+        for (let i = regions.length - 1; i >= 0; i--) {
+            if (regions[i].length >= 3 && regionContainsPoint(regions[i], x, y)) return i;
+        }
+        return -1;
     }
 
     function nearestEdgeContour(wx, wy, threshold) {
@@ -3446,6 +3494,26 @@ self.onmessage = function(e) {
             }
         });
 
+        // Exclude-mode overlays: highlight hovered region (orange) and excluded regions (red).
+        if (!(twoLayerMode && previewSide === 'back') && (copperExcludeMode || excludedRegionSet.size > 0)) {
+            for (let i = 0; i < copperRegions.length; i++) {
+                const region = copperRegions[i];
+                if (region.length < 3) continue;
+                const isExcluded = excludedRegionSet.has(i);
+                const isHovered  = copperExcludeMode && hoveredRegionIndex === i;
+                if (!isExcluded && !isHovered) continue;
+                ctx.beginPath();
+                ctx.moveTo(region[0].x, region[0].y);
+                for (let j = 1; j < region.length; j++) ctx.lineTo(region[j].x, region[j].y);
+                ctx.closePath();
+                ctx.fillStyle   = isExcluded ? 'rgba(255,60,60,0.32)' : 'rgba(255,200,0,0.32)';
+                ctx.strokeStyle = isExcluded ? 'rgba(255,80,80,0.85)' : 'rgba(255,210,0,0.85)';
+                ctx.lineWidth   = 1.5 / viewScale;
+                ctx.fill();
+                ctx.stroke();
+            }
+        }
+
         const previewMirrorDims = boardBounds || copperBounds || backCopperBounds;
         const backViewMirrorAxis = previewMirrorDims ? getBackMirrorAxisWorld(previewMirrorDims) : null;
         const withBackPreviewMirror = draw => {
@@ -3495,6 +3563,31 @@ self.onmessage = function(e) {
                     ctx.closePath();
                     ctx.fillStyle = 'rgba(91,180,255,0.8)';
                     ctx.fill();
+                }
+                ctx.restore();
+            }
+
+            // Back exclude-mode overlays (mirrored to match back copper display)
+            if ((copperExcludeMode || excludedBackRegionSet.size > 0) && backCopperRegions.length) {
+                ctx.save();
+                if (previewSide === 'back' && backViewMirrorAxis != null) {
+                    ctx.transform(-1, 0, 0, 1, backViewMirrorAxis, 0);
+                }
+                for (let i = 0; i < backCopperRegions.length; i++) {
+                    const region = backCopperRegions[i];
+                    if (region.length < 3) continue;
+                    const isExcluded = excludedBackRegionSet.has(i);
+                    const isHovered  = copperExcludeMode && hoveredRegionIndex === i;
+                    if (!isExcluded && !isHovered) continue;
+                    ctx.beginPath();
+                    ctx.moveTo(region[0].x, region[0].y);
+                    for (let j = 1; j < region.length; j++) ctx.lineTo(region[j].x, region[j].y);
+                    ctx.closePath();
+                    ctx.fillStyle   = isExcluded ? 'rgba(255,60,60,0.32)' : 'rgba(255,200,0,0.32)';
+                    ctx.strokeStyle = isExcluded ? 'rgba(255,80,80,0.85)' : 'rgba(255,210,0,0.85)';
+                    ctx.lineWidth   = 1.5 / viewScale;
+                    ctx.fill();
+                    ctx.stroke();
                 }
                 ctx.restore();
             }
@@ -5410,7 +5503,7 @@ self.onmessage = function(e) {
                 side: 'front',
                 segments:    copperSegments,
                 flashes:     copperFlashes,
-                regions:     copperRegions,
+                regions:     copperRegions.filter((_, i) => !excludedRegionSet.has(i)),
                 boardOutline: outerContour,
                 params: {
                     toolDiam,
@@ -5436,7 +5529,7 @@ self.onmessage = function(e) {
                 side: 'back',
                 segments:    backCopperSegments,
                 flashes:     backCopperFlashes,
-                regions:     backCopperRegions,
+                regions:     backCopperRegions.filter((_, i) => !excludedBackRegionSet.has(i)),
                 boardOutline: outerContour,
                 params: {
                     toolDiam,
@@ -5512,6 +5605,7 @@ self.onmessage = function(e) {
         backCopperToolpaths = [];
         backCopperBounds   = null;
         backIsoSelectedSet = new Set();
+        excludedBackRegionSet = new Set();
         backCopperFilenameEl.textContent = '';
         backCopperFileInput.value = '';
         backCopperErrorMsg.textContent = '';
@@ -5554,6 +5648,27 @@ self.onmessage = function(e) {
             const localX = e.clientX - rect.left;
             const localY = e.clientY - rect.top;
 
+            if (copperExcludeMode) {
+                let { x, y } = canvasToWorld(localX, localY);
+                const isBackView = twoLayerMode && previewSide === 'back';
+                if (isBackView) {
+                    const pmDims = boardBounds || copperBounds || backCopperBounds;
+                    const bma = pmDims ? getBackMirrorAxisWorld(pmDims) : null;
+                    if (bma !== null) x = bma - x;
+                }
+                const currentRegions = isBackView ? backCopperRegions : copperRegions;
+                const currentExcluded = isBackView ? excludedBackRegionSet : excludedRegionSet;
+                const idx = findRegionAtPoint(currentRegions, x, y);
+                if (idx >= 0) {
+                    if (currentExcluded.has(idx)) currentExcluded.delete(idx);
+                    else currentExcluded.add(idx);
+                    updateExcludedFillsDisplay();
+                    if (isBackView) rebuildIsolationBack(); else rebuildIsolation();
+                    drawPreview();
+                }
+                return;
+            }
+
             if (alignPinMode) {
                 const { x, y } = canvasToWorld(localX, localY);
                 alignmentPins.push({ x, y });
@@ -5587,6 +5702,22 @@ self.onmessage = function(e) {
         });
 
         window.addEventListener('mousemove', e => {
+            if (copperExcludeMode) {
+                const rect = canvas.getBoundingClientRect();
+                let { x, y } = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
+                const isBackView = twoLayerMode && previewSide === 'back';
+                if (isBackView) {
+                    const pmDims = boardBounds || copperBounds || backCopperBounds;
+                    const bma = pmDims ? getBackMirrorAxisWorld(pmDims) : null;
+                    if (bma !== null) x = bma - x;
+                }
+                const currentRegions = isBackView ? backCopperRegions : copperRegions;
+                const newHover = findRegionAtPoint(currentRegions, x, y);
+                if (newHover !== hoveredRegionIndex) {
+                    hoveredRegionIndex = newHover;
+                    scheduleRedraw();
+                }
+            }
             if (selectionDrag) {
                 const rect = canvas.getBoundingClientRect();
                 selectionDrag.curX = e.clientX - rect.left;
@@ -5956,6 +6087,16 @@ self.onmessage = function(e) {
             updateIsoSelectedDisplay();
         }
         updateRuntimeEstimate();
+        drawPreview();
+    });
+
+    document.getElementById('isoExcludeBtn').addEventListener('click', () => {
+        const next = !copperExcludeMode;
+        disableOtherInteractionModes(next ? 'isoExclude' : '');
+        copperExcludeMode = next;
+        hoveredRegionIndex = -1;
+        document.getElementById('isoExcludeBtn').classList.toggle('active', copperExcludeMode);
+        document.getElementById('isoExcludeHint').style.display = copperExcludeMode ? 'block' : 'none';
         drawPreview();
     });
 
