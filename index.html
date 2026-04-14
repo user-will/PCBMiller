@@ -1602,10 +1602,11 @@
         if (hasEdge) updatePassCount();
         else infoPasses.textContent = '—';
         infoTraces.textContent = hasCopper ? copperSegments.length + copperFlashes.length + copperRegions.length : '—';
-        infoIsoPaths.textContent = hasCopper ? copperToolpaths.length : '—';
+        const isoTotal = copperToolpaths.length + (twoLayerMode ? backCopperToolpaths.length : 0);
+        infoIsoPaths.textContent = hasCopper ? isoTotal : '—';
         infoDrillCount.textContent = hasDrill ? drillHoles.length : '—';
         headerBoardDims.textContent = dims ? `${dims.width.toFixed(1)}×${dims.height.toFixed(1)}` : '—';
-        headerIsoPaths.textContent = hasCopper ? String(copperToolpaths.length) : '—';
+        headerIsoPaths.textContent = hasCopper ? String(isoTotal) : '—';
         headerDrillCount.textContent = hasDrill ? String(drillHoles.length) : '—';
         updateIsoSelectedDisplay();
         updateEdgeSelectedDisplay();
@@ -1852,9 +1853,13 @@
     }
 
     function updateIsoSelectedDisplay() {
-        document.getElementById('infoIsoSelectable').textContent = copperToolpaths.length ? copperToolpaths.length : '—';
-        document.getElementById('infoIsoSelected').textContent = copperToolpaths.length
-            ? `${isoSelectedSet.size} / ${copperToolpaths.length}`
+        const backTotal = twoLayerMode ? backCopperToolpaths.length : 0;
+        const backSel   = twoLayerMode ? backIsoSelectedSet.size   : 0;
+        const totalPaths = copperToolpaths.length + backTotal;
+        const totalSel   = isoSelectedSet.size    + backSel;
+        document.getElementById('infoIsoSelectable').textContent = totalPaths ? totalPaths : '—';
+        document.getElementById('infoIsoSelected').textContent = totalPaths
+            ? `${totalSel} / ${totalPaths}`
             : '—';
     }
 
@@ -2894,10 +2899,13 @@ function buildIsolationToolpaths(segments, flashes, regions, params, boardOutlin
         var boardTouchTol = Math.max(2, Math.round(0.002 * CLIPPER_SCALE));
         for (var k=0;k<freeArea.length;k++) {
             var cpoly=freeArea[k]; if (cpoly.length<3) continue;
+            // Only keep CW (negative-area) polygons — the inner contours that hug isolated traces.
+            // For ground-fill boards each groove produces two contours: an outer CCW boundary on
+            // the fill side and an inner CW boundary on the trace side.  Keeping only the CW
+            // contour gives one isolation path per groove instead of two.  For non-ground-fill
+            // boards the trace holes in freeArea are also CW, so both cases are handled correctly.
+            if (ClipperLib.Clipper.Area(cpoly) >= 0) continue;
             var a=Math.abs(ClipperLib.Clipper.Area(cpoly));
-            // Skip the board-outline polygon: large AND its boundary lies on the board edge.
-            // Using AND ensures a large interior polygon (e.g. inner isolation of a perimeter trace)
-            // is kept even though its area exceeds the 50% threshold.
             if (a > 0.5 * boardArea && pathTouchesBoard(cpoly, boardClipPath, boardTouchTol)) continue;
             paths.push(fromClipper(cpoly)); added++;
         }
@@ -2927,9 +2935,10 @@ self.onmessage = function(e) {
             } else {
                 copperToolpaths = paths;
                 isoSelectedSet = new Set(paths.map((_, i) => i));
-                infoIsoPaths.textContent = paths.length;
-                updateIsoSelectedDisplay();
             }
+            const isoTotal = copperToolpaths.length + (twoLayerMode ? backCopperToolpaths.length : 0);
+            infoIsoPaths.textContent = isoTotal;
+            updateIsoSelectedDisplay();
             document.getElementById('isoComputingMsg').style.display = 'none';
             document.getElementById('computingOverlay').classList.remove('visible');
             refreshUiState();
@@ -3184,10 +3193,13 @@ self.onmessage = function(e) {
             const boardTouchTol = Math.max(2, Math.round(0.002 * CLIPPER_SCALE));
             for (const cpoly of freeArea) {
                 if (cpoly.length < 3) continue;
+                // Only keep CW (negative-area) polygons — the inner contours that hug isolated traces.
+                // For ground-fill boards each groove produces two contours: an outer CCW boundary on
+                // the fill side and an inner CW boundary on the trace side.  Keeping only the CW
+                // contour gives one isolation path per groove instead of two.  For non-ground-fill
+                // boards the trace holes in freeArea are also CW, so both cases are handled correctly.
+                if (ClipperLib.Clipper.Area(cpoly) >= 0) continue;
                 const a = Math.abs(ClipperLib.Clipper.Area(cpoly));
-                // Skip the board-outline polygon: large AND its boundary lies on the board edge.
-                // Using AND ensures a large interior polygon (e.g. inner isolation of a perimeter trace)
-                // is kept even though its area exceeds the 50% threshold.
                 if (a > 0.5 * boardArea && pathTouchesBoardClipper(cpoly, boardClipPath, boardTouchTol)) continue;
                 paths.push(fromClipper(cpoly));
                 added++;
@@ -3499,14 +3511,20 @@ self.onmessage = function(e) {
                 }
                 ctx.lineCap  = 'round';
                 ctx.lineJoin = 'round';
-                for (const path of backCopperToolpaths) {
+                for (let pathIndex = 0; pathIndex < backCopperToolpaths.length; pathIndex++) {
+                    const path = backCopperToolpaths[pathIndex];
+                    const isSelected = backIsoSelectedSet.has(pathIndex);
+                    if (!isSelected && !isoSelectMode) continue;
                     if (path.length < 2) continue;
                     ctx.beginPath();
                     ctx.moveTo(path[0].x, path[0].y);
                     for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
                     ctx.closePath();
-                    ctx.strokeStyle = 'rgba(93,219,255,0.8)';
+                    ctx.strokeStyle = isSelected ? 'rgba(93,219,255,0.84)' : 'rgba(180,235,255,0.18)';
                     ctx.lineWidth = cutWidth;
+                    ctx.stroke();
+                    ctx.strokeStyle = isSelected ? 'rgba(180,235,255,0.28)' : 'rgba(180,235,255,0.08)';
+                    ctx.lineWidth = Math.max(cutWidth * 0.22, 0.02);
                     ctx.stroke();
                 }
                 ctx.lineCap = 'butt';
@@ -5602,8 +5620,19 @@ self.onmessage = function(e) {
                         changed = applyBulkSelection(vcutSelectedSet, collectVcutsInRect(worldRect));
                         if (changed) updateVCutSelectedDisplay();
                     } else if (drag.layer === 'iso') {
-                        changed = applyBulkSelection(isoSelectedSet, collectClosedPathsInRect(copperToolpaths, worldRect));
-                        if (changed) updateIsoSelectedDisplay();
+                        const isBackIso = twoLayerMode && previewSide === 'back';
+                        if (isBackIso && backCopperToolpaths.length) {
+                            const pmDims = boardBounds || copperBounds || backCopperBounds;
+                            const bma = pmDims ? getBackMirrorAxisWorld(pmDims) : null;
+                            const backRect = bma !== null ? {
+                                minX: bma - worldRect.maxX, maxX: bma - worldRect.minX,
+                                minY: worldRect.minY, maxY: worldRect.maxY
+                            } : worldRect;
+                            changed = applyBulkSelection(backIsoSelectedSet, collectClosedPathsInRect(backCopperToolpaths, backRect));
+                        } else {
+                            changed = applyBulkSelection(isoSelectedSet, collectClosedPathsInRect(copperToolpaths, worldRect));
+                            if (changed) updateIsoSelectedDisplay();
+                        }
                     } else if (drag.layer === 'edge') {
                         changed = applyBulkSelection(edgeSelectedSet, collectClosedPathsInRect(edgeContourToolpaths, worldRect));
                         if (changed) {
@@ -5630,13 +5659,26 @@ self.onmessage = function(e) {
                         updateVCutSelectedDisplay();
                         changed = true;
                     }
-                } else if (drag.layer === 'iso' && copperToolpaths.length) {
-                    const idx = nearestIsoPath(x, y, threshold);
-                    if (idx >= 0) {
-                        if (isoSelectedSet.has(idx)) isoSelectedSet.delete(idx);
-                        else isoSelectedSet.add(idx);
-                        updateIsoSelectedDisplay();
-                        changed = true;
+                } else if (drag.layer === 'iso') {
+                    const isBackIso = twoLayerMode && previewSide === 'back';
+                    if (isBackIso && backCopperToolpaths.length) {
+                        const pmDims = boardBounds || copperBounds || backCopperBounds;
+                        const bma = pmDims ? getBackMirrorAxisWorld(pmDims) : null;
+                        const bx = bma !== null ? bma - x : x;
+                        const idx = nearestClosedPathIndex(backCopperToolpaths, bx, y, threshold);
+                        if (idx >= 0) {
+                            if (backIsoSelectedSet.has(idx)) backIsoSelectedSet.delete(idx);
+                            else backIsoSelectedSet.add(idx);
+                            changed = true;
+                        }
+                    } else if (!isBackIso && copperToolpaths.length) {
+                        const idx = nearestIsoPath(x, y, threshold);
+                        if (idx >= 0) {
+                            if (isoSelectedSet.has(idx)) isoSelectedSet.delete(idx);
+                            else isoSelectedSet.add(idx);
+                            updateIsoSelectedDisplay();
+                            changed = true;
+                        }
                     }
                 } else if (drag.layer === 'edge' && edgeContourToolpaths.length) {
                     const idx = nearestEdgeContour(x, y, threshold);
@@ -5896,15 +5938,23 @@ self.onmessage = function(e) {
     });
 
     document.getElementById('isoSelectAllBtn').addEventListener('click', () => {
-        isoSelectedSet = new Set(copperToolpaths.map((_, i) => i));
-        updateIsoSelectedDisplay();
+        if (twoLayerMode && previewSide === 'back') {
+            backIsoSelectedSet = new Set(backCopperToolpaths.map((_, i) => i));
+        } else {
+            isoSelectedSet = new Set(copperToolpaths.map((_, i) => i));
+            updateIsoSelectedDisplay();
+        }
         updateRuntimeEstimate();
         drawPreview();
     });
 
     document.getElementById('isoDeselectAllBtn').addEventListener('click', () => {
-        isoSelectedSet = new Set();
-        updateIsoSelectedDisplay();
+        if (twoLayerMode && previewSide === 'back') {
+            backIsoSelectedSet = new Set();
+        } else {
+            isoSelectedSet = new Set();
+            updateIsoSelectedDisplay();
+        }
         updateRuntimeEstimate();
         drawPreview();
     });
