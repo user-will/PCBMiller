@@ -1734,7 +1734,7 @@
             }
         }
 
-        if (twoLayerMode && backCopperToolpaths.length && (boardBounds || copperBounds)) {
+        if (twoLayerMode && backCopperToolpaths.length && (boardBounds || copperBounds || backCopperBounds)) {
             const feed = Math.max(1, parseFloat(document.getElementById('isoFeedRate').value) || 200);
             const depth = parseFloat(document.getElementById('isoDepth').value) || 0.1;
             for (const path of backCopperToolpaths) {
@@ -3357,7 +3357,7 @@ self.onmessage = function(e) {
     }
 
     function fitView() {
-        let bounds = boardBounds || copperBounds;
+        let bounds = boardBounds || copperBounds || backCopperBounds;
         if (!bounds && drillHoles.length) {
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
             for (const h of drillHoles) {
@@ -3391,7 +3391,8 @@ self.onmessage = function(e) {
     function drawPreview() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        const hasAnything = parsedContours.length || copperSegments.length || copperFlashes.length || copperRegions.length || drillHoles.length || vcutSegments.length;
+        const hasAnything = parsedContours.length || copperSegments.length || copperFlashes.length || copperRegions.length || drillHoles.length || vcutSegments.length
+            || backCopperSegments.length || backCopperFlashes.length || backCopperRegions.length;
         if (!hasAnything) {
             ctx.fillStyle = '#333';
             ctx.font = '14px system-ui';
@@ -3416,7 +3417,7 @@ self.onmessage = function(e) {
             ctx.restore();
         };
 
-        const dims = boardBounds || copperBounds;
+        const dims = boardBounds || copperBounds || backCopperBounds;
         withLayerFocus('edge', () => {
             if (!dims) return;
             const pad = 6 / viewScale;
