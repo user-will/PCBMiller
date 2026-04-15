@@ -2898,16 +2898,60 @@ function buildIsolationToolpaths(segments, flashes, regions, params, boardOutlin
     var toolDiam=params.toolDiam, isoWidth=params.isoWidth, numPasses=params.numPasses, stepover=params.stepover;
     var vbitAngle=params.vbitAngle||0, isoDepth=params.isoDepth||0;
     var extraRadius = (vbitAngle > 0 && vbitAngle < 180) ? Math.abs(isoDepth) * Math.tan((vbitAngle / 2) * (Math.PI / 180)) : 0;
+    // For V-bits the actual groove width at depth is wider than the tip diameter.
+    // Stepover must be based on effective cut width so the overlap % is honoured.
+    var effectiveWidth = toolDiam + 2 * extraRadius;
+    var adjustedStepover = toolDiam > 0 ? stepover * effectiveWidth / toolDiam : stepover;
+
+    // Build fill union once so we can check per-pad centre containment.
+    // Using a centre-point check (rather than a Clipper difference) avoids boundary
+    // artefacts: a ground pad whose edge protrudes slightly past the fill polygon is
+    // still excluded in full, and traces with proper clearance from the fill are
+    // never accidentally clipped.
+    var fillUnited = [];
+    if (regions.length > 0) {
+        var fpArr = [];
+        for (var i=0;i<regions.length;i++) {
+            var rg=regions[i]; if (rg.length<3) continue;
+            var fp=toClipper(rg);
+            if (ClipperLib.Clipper.Area(fp) < 0) fp.reverse();
+            fpArr.push(fp);
+        }
+        if (fpArr.length > 0) {
+            var fc = new ClipperLib.Clipper();
+            fc.AddPaths(fpArr, ClipperLib.PolyType.ptSubject, true);
+            fc.Execute(ClipperLib.ClipType.ctUnion, fillUnited, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+        }
+    }
+
+    // Build copperPolys — all segments (traces always have clearance from fills) plus
+    // only those flashes whose centre is NOT inside a fill region.  A pad whose centre
+    // is inside fill is ground-connected and must not receive an isolation ring.
     var copperPolys = [];
     for (var i=0;i<segments.length;i++) { var s=segments[i]; if (s.r>0) copperPolys.push(toClipper(stadiumBuffer(s.x1,s.y1,s.x2,s.y2,s.r))); }
-    for (var i=0;i<flashes.length;i++) { var f=flashes[i]; copperPolys.push(toClipper(flashBuffer(f.x,f.y,f.ap,0))); }
-    for (var i=0;i<regions.length;i++) { var rg=regions[i]; if (rg.length>=3) copperPolys.push(toClipper(rg)); }
+    for (var i=0;i<flashes.length;i++) {
+        var f=flashes[i];
+        var padInFill = false;
+        if (fillUnited.length > 0) {
+            var pt = { X: Math.round(f.x * CLIPPER_SCALE), Y: Math.round(f.y * CLIPPER_SCALE) };
+            var inOuter = false, inHole = false;
+            for (var j=0;j<fillUnited.length;j++) {
+                if (ClipperLib.Clipper.PointInPolygon(pt, fillUnited[j]) !== 0) {
+                    // CCW path (Area ≥ 0) = fill region boundary; CW path = clearance hole.
+                    if (ClipperLib.Clipper.Area(fillUnited[j]) >= 0) inOuter = true;
+                    else inHole = true;
+                }
+            }
+            padInFill = inOuter && !inHole;
+        }
+        if (!padInFill) copperPolys.push(toClipper(flashBuffer(f.x,f.y,f.ap,0)));
+    }
     if (!copperPolys.length) return [];
     // Normalise all copper polygons to CCW winding (Area > 0) before union.
-    // flashBuffer/circlePoints produce CCW; stadiumBuffer and Gerber region polys
-    // produce CW.  With pftNonZero, opposite-winding polygons cancel in their
-    // overlap zone (winding sums to 0), punching holes into pads wherever a trace
-    // or copper-pour region touches them.  Making everything CCW eliminates this.
+    // flashBuffer/circlePoints produce CCW; stadiumBuffer produces CW.
+    // With pftNonZero, opposite-winding polygons cancel in their overlap zone
+    // (winding sums to 0), punching holes into pads.  Making everything CCW
+    // eliminates this.
     for (var i = 0; i < copperPolys.length; i++) {
         if (ClipperLib.Clipper.Area(copperPolys[i]) < 0) copperPolys[i].reverse();
     }
@@ -2920,9 +2964,21 @@ function buildIsolationToolpaths(segments, flashes, regions, params, boardOutlin
         boardClipPath = toClipper(boardOutline);
         usingRealBoard = true;
     } else {
+        // Derive a synthetic boundary from ALL copper (including regions) so the
+        // board box correctly encloses any fills that extend beyond the traces.
         var margin = CLIPPER_SCALE, minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
-        for (var i=0;i<united.length;i++) for (var j=0;j<united[i].length;j++) {
-            var pt=united[i][j];
+        var allPts = united;
+        // Also scan region polygons for bounds.
+        for (var i=0;i<regions.length;i++) {
+            var rg=regions[i];
+            for (var j=0;j<rg.length;j++) {
+                var rx=Math.round(rg[j].x*CLIPPER_SCALE), ry=Math.round(rg[j].y*CLIPPER_SCALE);
+                if (rx<minX) minX=rx; if (ry<minY) minY=ry;
+                if (rx>maxX) maxX=rx; if (ry>maxY) maxY=ry;
+            }
+        }
+        for (var i=0;i<allPts.length;i++) for (var j=0;j<allPts[i].length;j++) {
+            var pt=allPts[i][j];
             if (pt.X<minX) minX=pt.X; if (pt.Y<minY) minY=pt.Y;
             if (pt.X>maxX) maxX=pt.X; if (pt.Y>maxY) maxY=pt.Y;
         }
@@ -2931,7 +2987,7 @@ function buildIsolationToolpaths(segments, flashes, regions, params, boardOutlin
     if (boardClipPath) boardArea = Math.abs(ClipperLib.Clipper.Area(boardClipPath));
     var paths = [];
     for (var p=0; p<numPasses; p++) {
-        var expandBy = toolDiam/2 + extraRadius + isoWidth + p*stepover;
+        var expandBy = toolDiam/2 + extraRadius + isoWidth + p * adjustedStepover;
         var co = new ClipperLib.ClipperOffset(2.0, CLIPPER_ARC_TOL);
         co.AddPaths(united, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
         var expanded = new ClipperLib.Paths();
@@ -2947,11 +3003,8 @@ function buildIsolationToolpaths(segments, flashes, regions, params, boardOutlin
         var boardTouchTol = Math.max(2, Math.round(0.002 * CLIPPER_SCALE));
         for (var k=0;k<freeArea.length;k++) {
             var cpoly=freeArea[k]; if (cpoly.length<3) continue;
-            // Only keep CW (negative-area) polygons — the inner contours that hug isolated traces.
-            // For ground-fill boards each groove produces two contours: an outer CCW boundary on
-            // the fill side and an inner CW boundary on the trace side.  Keeping only the CW
-            // contour gives one isolation path per groove instead of two.  For non-ground-fill
-            // boards the trace holes in freeArea are also CW, so both cases are handled correctly.
+            // Keep CW (negative-area) polygons — holes in freeArea = outer boundaries
+            // of expanded signal copper = tool centre paths around each trace/pad.
             if (ClipperLib.Clipper.Area(cpoly) >= 0) continue;
             var a=Math.abs(ClipperLib.Clipper.Area(cpoly));
             if (a > 0.5 * boardArea && pathTouchesBoard(cpoly, boardClipPath, boardTouchTol)) continue;
@@ -3110,15 +3163,18 @@ self.onmessage = function(e) {
 
     // Build isolation toolpaths using Clipper for correct polygon union + offset.
     //
-    // The algorithm matches pcb2gcode's approach (bg::buffer / ClipperOffset):
-    //   1. Represent every copper feature as a polygon (stadium for strokes, pad
-    //      shape for flashes, region polygons as-is).
-    //   2. Union all copper polygons → one merged multi-polygon.
-    //   3. For each isolation pass, expand the union outward by
-    //        tool_radius + clearance + pass * stepover
-    //      using ClipperOffset with round joins.  The resulting polygon boundaries
-    //      are the tool-centre paths — correctly handling concave traces, shared
-    //      pad-to-trace junctions, and adjacent-trace clearance merging.
+    // Algorithm:
+    //   1. Build fill union from regions; use it to identify ground-connected pads
+    //      via centre-point containment (avoids Clipper boundary artefacts).
+    //   2. Union all segments (traces) + only non-fill flashes (signal pads) into the
+    //      signal copper union.
+    //   3. For each pass, expand the signal union outward by
+    //        tool_radius + extraRadius + isoWidth + pass * adjustedStepover
+    //      where adjustedStepover accounts for the full V-bit cut width at depth so
+    //      the pass-overlap percentage is accurate.
+    //   4. freeArea = board − expanded_signal.  CW (negative-area) holes in freeArea
+    //      are the outer boundaries of expanded traces/pads = tool centre paths.
+    //      Paths expand freely into fill areas and stop at adjacent signal copper.
     //
     // Returns [[{x,y}]] — one closed polyline per boundary loop per pass.
     function buildIsolationToolpaths(segments, flashes, regions) {
@@ -3131,26 +3187,60 @@ self.onmessage = function(e) {
         const isoWidth   = isFinite(parseFloat(document.getElementById('isoWidth').value)) ? parseFloat(document.getElementById('isoWidth').value) : 0.2;
         const numPasses  = parseInt(document.getElementById('isoPasses').value) || 2;
         const overlapPct = parseFloat(document.getElementById('isoOverlap').value) || 50;
-        const stepover   = toolDiam * (1 - overlapPct / 100);
         const vbitAngle  = isEndMillMode() ? 0 : (parseFloat(document.getElementById('vbitAngle').value) || 0);
         const isoDepth   = parseFloat(document.getElementById('isoDepth').value) || 0;
         const extraRadius = (vbitAngle > 0 && vbitAngle < 180) ? Math.abs(isoDepth) * Math.tan((vbitAngle / 2) * (Math.PI / 180)) : 0;
+        // Stepover uses effective V-bit cut width at depth so the overlap % is correct.
+        const effectiveWidth = toolDiam + 2 * extraRadius;
+        const stepover = effectiveWidth * (1 - overlapPct / 100);
 
-        // Step 1 — convert all copper to Clipper polygons (the bare copper shape, no clearance yet).
+        // Step 1 — build fill union for ground-pad detection via centre-point check.
+        // A centre-point check avoids Clipper boundary artefacts: a ground pad whose
+        // edge protrudes slightly past the fill is excluded in full, and traces with
+        // proper fill clearance are never accidentally clipped.
+        const fillUnited = new ClipperLib.Paths();
+        if (regions.length > 0) {
+            const fillPolys = [];
+            for (const region of regions) {
+                if (region.length < 3) continue;
+                const fp = toClipper(region);
+                if (ClipperLib.Clipper.Area(fp) < 0) fp.reverse();
+                fillPolys.push(fp);
+            }
+            if (fillPolys.length > 0) {
+                const fc = new ClipperLib.Clipper();
+                fc.AddPaths(fillPolys, ClipperLib.PolyType.ptSubject, true);
+                fc.Execute(ClipperLib.ClipType.ctUnion, fillUnited,
+                    ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+            }
+        }
+
+        // Step 2 — build copperPolys: all segments + flashes whose centre is NOT
+        // inside fill.  Pads inside fill are ground-connected → no isolation ring.
         const copperPolys = [];
         for (const seg of segments) {
             if (seg.r > 0)
                 copperPolys.push(toClipper(stadiumBuffer(seg.x1, seg.y1, seg.x2, seg.y2, seg.r)));
         }
         for (const flash of flashes) {
-            copperPolys.push(toClipper(flashBuffer(flash.x, flash.y, flash.ap, 0)));
-        }
-        for (const region of regions) {
-            if (region.length >= 3) copperPolys.push(toClipper(region));
+            let padInFill = false;
+            if (fillUnited.length > 0) {
+                const pt = { X: Math.round(flash.x * CLIPPER_SCALE), Y: Math.round(flash.y * CLIPPER_SCALE) };
+                let inOuter = false, inHole = false;
+                for (const path of fillUnited) {
+                    if (ClipperLib.Clipper.PointInPolygon(pt, path) !== 0) {
+                        if (ClipperLib.Clipper.Area(path) >= 0) inOuter = true; // CCW = fill region
+                        else inHole = true;                                       // CW = clearance hole
+                    }
+                }
+                padInFill = inOuter && !inHole;
+            }
+            if (!padInFill)
+                copperPolys.push(toClipper(flashBuffer(flash.x, flash.y, flash.ap, 0)));
         }
         if (!copperPolys.length) return [];
 
-        // Step 2 — union all copper shapes.
+        // Step 3 — union signal copper.
         const clipper = new ClipperLib.Clipper();
         clipper.AddPaths(copperPolys, ClipperLib.PolyType.ptSubject, true);
         const united = new ClipperLib.Paths();
@@ -3160,29 +3250,17 @@ self.onmessage = function(e) {
             ClipperLib.PolyFillType.pftNonZero
         );
 
-        // Step 3 — for each pass, compute the remaining copper-free area and collect its
-        // boundaries as tool paths.
-        //
-        // KEY INSIGHT for ground-fill boards: when a board has a ground plane, the isolation
-        // groove is the GAP between a trace and the ground fill.  That gap is an inner contour
-        // (hole) in the copper union.  When the copper union is offset outward, the gap shrinks
-        // from both sides.  The boundaries of the shrinking gap ARE the isolation paths, but
-        // they are inner contours (negative area) and were previously discarded.
-        //
-        // Correct algorithm (board outline loaded):
-        //   freeArea = board_polygon  MINUS  expanded_copper
-        //   toolpaths = all boundaries of freeArea EXCEPT the board outline itself.
-        // This naturally handles both ground-fill and non-ground-fill boards:
-        //   - Ground-fill: freeArea = narrow strips around traces (positive-area small polygons)
-        //   - No ground-fill: freeArea = board with circular holes punched out (negative-area holes)
-        //   In both cases the boundaries are the isolation rings we want to mill.
-        //
-        // Without board outline: fall back to outer-contour-only approach (works for non-ground-fill).
+        // Step 4 — for each pass, expand the signal union outward, then compute
+        // freeArea = board − expanded_signal.  The CW (negative-area) holes in
+        // freeArea are the outer boundaries of expanded traces/pads — those are the
+        // tool centre paths.  Paths expand freely into fill areas and only stop when
+        // they would reach another signal trace/pad (or the board edge).
 
         // Board-boundary path in Clipper coords.
-        // When the edge-cuts file is loaded we use the real outline; otherwise we synthesise a
-        // bounding-box boundary from the copper union itself (expanded by a small margin) so the
-        // Difference algorithm works even without edge cuts.
+        // When the edge-cuts file is loaded we use the real outline; otherwise we
+        // synthesise a bounding-box boundary that covers ALL copper (including
+        // regions) so the board box correctly encloses any fills that extend beyond
+        // the traces.
         let boardClipPath = null;
         let boardArea = 0;
         let usingRealBoard = false;
@@ -3190,15 +3268,25 @@ self.onmessage = function(e) {
             boardClipPath = toClipper(outerContour);
             usingRealBoard = true;
         } else {
-            // Derive a synthetic boundary from the bounding box of all copper polygons.
-            const margin = 1.0 * CLIPPER_SCALE; // 1 mm margin outside copper extent
+            const margin = 1.0 * CLIPPER_SCALE;
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            // Scan signal union AND regions for the full extent.
             for (const poly of united) {
                 for (const pt of poly) {
                     if (pt.X < minX) minX = pt.X;
                     if (pt.Y < minY) minY = pt.Y;
                     if (pt.X > maxX) maxX = pt.X;
                     if (pt.Y > maxY) maxY = pt.Y;
+                }
+            }
+            for (const region of regions) {
+                for (const rpt of region) {
+                    const rx = Math.round(rpt.x * CLIPPER_SCALE);
+                    const ry = Math.round(rpt.y * CLIPPER_SCALE);
+                    if (rx < minX) minX = rx;
+                    if (ry < minY) minY = ry;
+                    if (rx > maxX) maxX = rx;
+                    if (ry > maxY) maxY = ry;
                 }
             }
             if (isFinite(minX)) {
@@ -3241,11 +3329,8 @@ self.onmessage = function(e) {
             const boardTouchTol = Math.max(2, Math.round(0.002 * CLIPPER_SCALE));
             for (const cpoly of freeArea) {
                 if (cpoly.length < 3) continue;
-                // Only keep CW (negative-area) polygons — the inner contours that hug isolated traces.
-                // For ground-fill boards each groove produces two contours: an outer CCW boundary on
-                // the fill side and an inner CW boundary on the trace side.  Keeping only the CW
-                // contour gives one isolation path per groove instead of two.  For non-ground-fill
-                // boards the trace holes in freeArea are also CW, so both cases are handled correctly.
+                // Keep CW (negative-area) polygons — holes in freeArea = outer boundaries
+                // of expanded signal copper = tool centre paths around each trace/pad.
                 if (ClipperLib.Clipper.Area(cpoly) >= 0) continue;
                 const a = Math.abs(ClipperLib.Clipper.Area(cpoly));
                 if (a > 0.5 * boardArea && pathTouchesBoardClipper(cpoly, boardClipPath, boardTouchTol)) continue;
