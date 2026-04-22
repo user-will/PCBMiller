@@ -1113,6 +1113,13 @@
                 </div>
                 <div class="hint">Machine max: 1000 mm/min</div>
             </div>
+            <div class="input-group hidden" id="edgeBackSideGroup">
+                <label class="toggle-label">
+                    <input type="checkbox" id="edgeCutsOnBackSide">
+                    <span>Cut on Side 2 after flip</span>
+                </label>
+                <div class="hint">Adds a mirrored back-side outline pass after flipping onto the alignment pins.</div>
+            </div>
             <div class="input-group" style="margin-top:8px">
                 <label class="toggle-label">
                     <input type="checkbox" id="depanelMode"> Depanelize Panel
@@ -1229,6 +1236,7 @@
                     <button class="btn-secondary hidden" id="downloadDepanelBtn">Depanel.nc</button>
                     <button class="btn-secondary hidden" id="downloadSide1Btn">Side1.nc</button>
                     <button class="btn-secondary hidden" id="downloadSide2Btn">Side2.nc</button>
+                    <button class="btn-secondary hidden" id="downloadExtraBtn">Extra.nc</button>
                 </div>
             </div>
         </div>
@@ -1355,6 +1363,7 @@
     let gcSide2 = '';  // separate-mode two-layer: side 2
     let vcutBothSides = false;
     let gcodeVCutsBack = '';  // separate-mode: back side V-cut GCode (non-two-layer)
+    let separateExportFiles = [];
 
     // Canvas pan/zoom
     let viewScale = 10;
@@ -1412,6 +1421,8 @@
     const drillSection      = document.getElementById('drillSection');
     const drillSideGroup    = document.getElementById('drillSideGroup');
     const drillOnBackSideEl = document.getElementById('drillOnBackSide');
+    const edgeBackSideGroup = document.getElementById('edgeBackSideGroup');
+    const edgeCutsOnBackSideEl = document.getElementById('edgeCutsOnBackSide');
     const outputModeSection = document.getElementById('outputModeSection');
     const modeCombined      = document.getElementById('modeCombined');
     const downloadTracesBtn = document.getElementById('downloadTracesBtn');
@@ -1450,9 +1461,38 @@
     const downloadSide1Btn     = document.getElementById('downloadSide1Btn');
     const downloadSide2Btn     = document.getElementById('downloadSide2Btn');
     const downloadVCutsBackBtn = document.getElementById('downloadVCutsBackBtn');
+    const downloadExtraBtn     = document.getElementById('downloadExtraBtn');
+    const separateDownloadButtons = [
+        downloadTracesBtn,
+        downloadDrillBtn,
+        downloadOutlineBtn,
+        downloadVCutsBtn,
+        downloadVCutsBackBtn,
+        downloadDepanelBtn,
+        downloadSide1Btn,
+        downloadSide2Btn,
+        downloadExtraBtn,
+    ];
 
     function show(el) { el.classList.remove('hidden'); }
     function hide(el) { el.classList.add('hidden'); }
+    function resetSeparateDownloadButtons() {
+        separateDownloadButtons.forEach(btn => {
+            btn.classList.add('hidden');
+            delete btn.dataset.exportIdx;
+        });
+    }
+    function renderSeparateDownloadButtons() {
+        resetSeparateDownloadButtons();
+        if (modeCombined.checked) return;
+        separateExportFiles.forEach((file, idx) => {
+            const btn = separateDownloadButtons[idx];
+            if (!btn) return;
+            btn.textContent = file.label;
+            btn.dataset.exportIdx = String(idx);
+            btn.classList.remove('hidden');
+        });
+    }
     function hasEdgeCutsLoaded() { return !!toolpath; }
     function hasCopperLoaded() { return copperSegments.length || copperFlashes.length || copperRegions.length; }
     function hasDrillLoaded() { return drillHoles.length > 0; }
@@ -1554,6 +1594,7 @@
         alignPinsSection ? alignPinsSection.classList.toggle('hidden', !showAlignPins) : null;
         sideViewSection  ? sideViewSection.classList.toggle('hidden', !twoLayerMode) : null;
         drillSideGroup   ? drillSideGroup.classList.toggle('hidden', !twoLayerMode) : null;
+        edgeBackSideGroup ? edgeBackSideGroup.classList.toggle('hidden', !twoLayerMode || !hasEdge) : null;
 
         // Legend chips for two-layer
         const legendBackCu   = document.getElementById('legendBackCu');
@@ -1583,11 +1624,10 @@
             hide(gcodeSection);
             hide(bufferShell);
             gcodeOutput.value = '';
+            separateExportFiles = [];
             copyBtn.classList.add('hidden');
             downloadBtn.classList.add('hidden');
-            downloadTracesBtn.classList.add('hidden');
-            downloadDrillBtn.classList.add('hidden');
-            downloadOutlineBtn.classList.add('hidden');
+            resetSeparateDownloadButtons();
             infoWidth.textContent = '—';
             infoHeight.textContent = '—';
             infoContours.textContent = '—';
@@ -1698,6 +1738,40 @@
             }
         }
 
+        if (twoLayerMode && edgeCutsOnBackSideEl?.checked) {
+            const feed = Math.max(1, parseFloat(document.getElementById('feedRate').value) || 200);
+            const cutDepth = parseFloat(document.getElementById('cutDepth').value) || 1.6;
+            const passDepth = parseFloat(document.getElementById('passDepth').value) || 1.8;
+            const passes = buildPasses(cutDepth, passDepth);
+            const mirroredStart = path => toGCBack(path[0]);
+
+            if (!depanelMode && selectedOuterToolpath && toolpathLens && toolpathLens.length) {
+                const total = toolpathLens[toolpathLens.length - 1];
+                const start = mirroredStart(toolpath);
+                for (const passZ of passes) {
+                    minutes += Math.hypot(start.x, start.y) / feed;
+                    minutes += total / feed;
+                    minutes += ((safeZ + Math.abs(passZ)) * 2) / plungeRate;
+                }
+            }
+
+            if (!depanelMode && edgeContourToolpaths.length) {
+                for (let i = 0; i < edgeContourToolpaths.length; i++) {
+                    if (i === outerContourIndex || !edgeSelectedSet.has(i)) continue;
+                    const tp = edgeContourToolpaths[i];
+                    if (!tp || tp.length < 2) continue;
+                    const lens = computeArcLengths(tp);
+                    const total = lens[lens.length - 1];
+                    const start = mirroredStart(tp);
+                    for (const passZ of passes) {
+                        minutes += Math.hypot(start.x, start.y) / feed;
+                        minutes += total / feed;
+                        minutes += ((safeZ + Math.abs(passZ)) * 2) / plungeRate;
+                    }
+                }
+            }
+        }
+
         if (vcutSelectedSet.size > 0) {
             const feed  = Math.max(1, parseFloat(document.getElementById('vcutFeedRate').value) || 150);
             const depth = parseFloat(document.getElementById('vcutDepth').value) || 0.3;
@@ -1761,6 +1835,7 @@
         edgeContourToolpaths = [];
         edgeSelectedSet = new Set();
         edgeInsideSet = new Set();
+        if (edgeCutsOnBackSideEl) edgeCutsOnBackSideEl.checked = false;
         edgeSelectMode = false;
         edgeSideMode = false;
         depanelToolpaths = [];
@@ -4356,7 +4431,7 @@ self.onmessage = function(e) {
         return bestLen;
     }
 
-    function rotateToolpathToStartLen(startLen) {
+    function rotateToolpathToStartLen(startLen, pointTransform = toGC) {
         if (!toolpath || !toolpath.length) return [];
         const startPt = pointAtLength(startLen);
         let bestIdx = 0;
@@ -4370,7 +4445,7 @@ self.onmessage = function(e) {
                 bestIdx = i;
             }
         }
-        return rotateClosedPath(toolpath, bestIdx).map(toGC);
+        return rotateClosedPath(toolpath, bestIdx).map(pointTransform);
     }
 
     // Emit G-code for V-cut score lines. depth is negative (e.g. -0.3).
@@ -4502,13 +4577,13 @@ self.onmessage = function(e) {
 
     // Emit G-code lines for one full pass around the contour at depth passZ.
     // useTabs = true only on passes where we actually want gaps (typically the final pass).
-    function emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f) {
+    function emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f, pointTransform = toGC) {
         const total = toolpathLens[toolpathLens.length - 1];
         const STEP = 0.3;
 
         if (!useTabs || !tabs.length) {
             const startLen = findOptimizedStartLen();
-            const loop = rotateToolpathToStartLen(startLen);
+            const loop = rotateToolpathToStartLen(startLen, pointTransform);
             const start = loop[0];
             lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
             lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
@@ -4520,7 +4595,7 @@ self.onmessage = function(e) {
         } else {
             const intervals = buildTabIntervals();
             const startLen  = findOptimizedStartLen(intervals);
-            const startPt   = toGC(pointAtLength(startLen));
+            const startPt   = pointTransform(pointAtLength(startLen));
 
             lines.push(`G0 X${f(startPt.x)} Y${f(startPt.y)}`);
             lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
@@ -4532,7 +4607,7 @@ self.onmessage = function(e) {
                 const step = Math.min(STEP, total - walked);
                 walked += step;
                 const len = ((startLen + walked) % total + total) % total;
-                const pt  = toGC(pointAtLength(len));
+                const pt  = pointTransform(pointAtLength(len));
 
                 // Is this arc-length inside any tab?
                 const absLen = (startLen + walked) % total;
@@ -4573,6 +4648,42 @@ self.onmessage = function(e) {
         lines.push(`G0 Z${f(safeZ)}  ; retract`);
     }
 
+    function emitClosedPathPassLinesBack(lines, path, passZ, safeZ, feedRate, plungeRate, f) {
+        if (!path || path.length < 2) return;
+        const start = toGCBack(path[0]);
+        lines.push(`G0 X${f(start.x)} Y${f(start.y)}`);
+        lines.push(`G1 Z${f(passZ)} F${plungeRate}  ; plunge`);
+        for (let i = 1; i < path.length; i++) {
+            const pt = toGCBack(path[i]);
+            lines.push(`G1 X${f(pt.x)} Y${f(pt.y)} F${feedRate}`);
+        }
+        lines.push(`G1 X${f(start.x)} Y${f(start.y)} F${feedRate}  ; close`);
+        lines.push(`G0 Z${f(safeZ)}  ; retract`);
+    }
+
+    function emitBackEdgeLines(lines, selectedOuterToolpath, selectedInnerEdgeToolpaths, passes, safeZ, feedRate, plungeRate, tabLayers, f) {
+        if (!selectedOuterToolpath && !selectedInnerEdgeToolpaths.length) return;
+        lines.push('');
+        lines.push('; === EDGE CUTS — BACK SIDE (mirrored X) ===');
+        if (selectedOuterToolpath) {
+            passes.forEach((passZ, i) => {
+                const useTabs = tabs.length > 0 && i >= passes.length - tabLayers;
+                lines.push('');
+                lines.push(`; --- Outer contour pass ${i + 1}/${passes.length}: Z${f(passZ)}${useTabs ? ' (tabs)' : ''} ---`);
+                emitPassLines(lines, passZ, safeZ, feedRate, plungeRate, useTabs, f, toGCBack);
+            });
+        }
+        selectedInnerEdgeToolpaths.forEach((path, contourIdx) => {
+            lines.push('');
+            lines.push(`; --- Inner contour ${contourIdx + 1}/${selectedInnerEdgeToolpaths.length} ---`);
+            passes.forEach((passZ, passIdx) => {
+                lines.push('');
+                lines.push(`; Pass ${passIdx + 1}/${passes.length}: Z${f(passZ)}`);
+                emitClosedPathPassLinesBack(lines, path, passZ, safeZ, feedRate, plungeRate, f);
+            });
+        });
+    }
+
     function generateGcode() {
         const activeVCuts = vcutSegments.filter((_, i) => vcutSelectedSet.has(i));
         const activeIsolationPaths = copperToolpaths.filter((_, i) => isoSelectedSet.has(i));
@@ -4589,10 +4700,12 @@ self.onmessage = function(e) {
         const hasBackIsolation = activeBackIsolationPaths.length > 0;
         const hasAlignPins = twoLayerMode && alignmentPins.length > 0;
         const hasDepanel = activeDepanelToolpaths.length > 0;
+        const edgeCutsOnBackSide = twoLayerMode && !!edgeCutsOnBackSideEl?.checked;
         const hasEdgeCuts = !depanelMode
             ? (!!selectedOuterToolpath || selectedInnerEdgeToolpaths.length > 0)
             : (!!selectedOuterToolpath && depanelCutOuter);
-        if (!hasEdgeCuts && !hasIsolation && !drillHoles.length && !hasVCuts && !hasDepanel) return '';
+        const hasBackEdgeCuts = hasEdgeCuts && edgeCutsOnBackSide;
+        if (!hasEdgeCuts && !hasBackEdgeCuts && !hasIsolation && !drillHoles.length && !hasVCuts && !hasDepanel) return '';
 
         // Compute canonical bounds once for all operations.
         // For drill-only or V-cut-only files, synthesize bounds from geometry.
@@ -4723,6 +4836,11 @@ self.onmessage = function(e) {
             });
         }
 
+        const backEdgeLines = [];
+        if (hasBackEdgeCuts) {
+            emitBackEdgeLines(backEdgeLines, selectedOuterToolpath, selectedInnerEdgeToolpaths, passes, safeZ, feedRate, plungeRate, tabLayers, f);
+        }
+
         // --- Helpers for assembly ---
         const drillBitSizes = hasDrill ? [...new Set(drillHoles.map(h => h.diam > 0 ? h.diam.toFixed(3) : '?'))].sort((a, b) => parseFloat(a) - parseFloat(b)) : [];
 
@@ -4737,7 +4855,9 @@ self.onmessage = function(e) {
             if (hasVCuts)     h.push(`; V-cut scoring: ${activeVCuts.length} lines, depth ${Math.abs(vcutDepthVal)} mm at ${vcutFeedRate} mm/min`);
             if (hasDrill)     h.push(`; Drilling: ${drillHoles.length} holes, depth ${drillDepthUi} mm, bits: ${drillBitSizes.join(', ')} mm${drillOnBackSide ? ' (Side 2 mirrored)' : ''}`);
             if (hasDepanel)   h.push(`; Depanelization: ${activeDepanelToolpaths.length} sub-boards, depth ${cutDepthUi} mm, feed ${feedRate} mm/min`);
-            if (hasEdgeCuts)  h.push(`; Edge cuts: depth ${cutDepthUi} mm, ${passes.length} pass(es), feed ${feedRate} mm/min`);
+            if (hasEdgeCuts || hasBackEdgeCuts) {
+                h.push(`; Edge cuts: depth ${cutDepthUi} mm, ${passes.length} pass(es), feed ${feedRate} mm/min${hasBackEdgeCuts ? ' (back side mirrored enabled)' : ''}`);
+            }
             return h;
         }
 
@@ -4819,13 +4939,16 @@ self.onmessage = function(e) {
                 lines.push(...merged[i].content);
             }
 
-            if ((twoLayerMode && (hasBackIsolation || hasBackVCuts || backDrillLines.length)) || (!twoLayerMode && hasBackVCuts)) {
+            if ((twoLayerMode && (hasBackIsolation || hasBackVCuts || backDrillLines.length || backEdgeLines.length)) || (!twoLayerMode && hasBackVCuts)) {
                 const side2Sections = [];
                 if (hasBackIsolation || hasBackVCuts) {
                     side2Sections.push({ content: [...backIsolationLines, ...backVcutLines], tool: isoTool });
                 }
                 if (backDrillLines.length) {
                     side2Sections.push({ content: backDrillLines, tool: drillTool });
+                }
+                if (backEdgeLines.length) {
+                    side2Sections.push({ content: backEdgeLines, tool: edgeTool });
                 }
                 const flipInstructions = [
                     '',
@@ -4868,10 +4991,12 @@ self.onmessage = function(e) {
             lines.push('');
             lines.push('M5   ; spindle off');
             lines.push(`G0 Z${f(safeZ)}`);
+            lines.push('G0 X0 Y0  ; return to home');
             lines.push('M30  ; end of program');
 
             gcodeTraces = gcodeOutline = gcodeDrill = gcodeVCuts = gcodeDepanel = gcodeVCutsBack = '';
             gcSide1 = gcSide2 = '';
+            separateExportFiles = [];
             result = optimizeMotionOutput(lines).join('\n');
         } else {
             // Separate files — each is a standalone, valid GCode file
@@ -4884,58 +5009,46 @@ self.onmessage = function(e) {
                 ]).join('\n');
             }
 
-            gcodeTraces    = hasIsolation ? buildSectionFile('Isolation Routing', isolationLines) : '';
-            gcodeVCuts     = hasVCuts     ? buildSectionFile('V-Cut Scoring',     vcutLines)      : '';
-            gcodeDrill     = drillLines.length ? buildSectionFile('Drilling', drillLines) : '';
-            gcodeDepanel   = hasDepanel   ? buildSectionFile('Depanelization',     depanelLines)   : '';
-            gcodeOutline   = hasEdgeCuts  ? buildSectionFile('Board Outline',      edgeLines)      : '';
-            gcodeVCutsBack = (!twoLayerMode && hasBackVCuts)
-                ? buildSectionFile('V-Cut Scoring — Back Side', backVcutLines) : '';
+            separateExportFiles = [];
+            const pushSeparateFile = (label, filename, title, sectionLines) => {
+                if (!sectionLines.length) return '';
+                const content = buildSectionFile(title, sectionLines);
+                separateExportFiles.push({ label, filename, content });
+                return content;
+            };
 
             if (twoLayerMode) {
-                // Build Side 1: front iso + V-cuts + alignment pin drilling + through holes + outline
-                const side1Lines = [];
-                if (hasIsolation || hasVCuts) side1Lines.push(...isolationLines, ...vcutLines);
-                if (hasAlignPins) side1Lines.push(...alignPinLines);
-                if (drillLines.length) side1Lines.push(...drillLines);
-                if (hasDepanel) side1Lines.push(...depanelLines);
-                if (hasEdgeCuts) side1Lines.push(...edgeLines);
-                gcSide1 = side1Lines.length ? buildSectionFile('Side 1 — Front', side1Lines) : '';
-                // Side 2 header with flip instructions
-                const side2Header = [
-                    '; ================================================================',
-                    '; SIDE 2 — BACK',
-                    '; Before running: flip board face-down onto alignment pins, re-zero Z',
-                    '; ================================================================',
-                    '',
-                ];
-                const side2Content = [...side2Header];
-                if (hasBackIsolation) side2Content.push(...backIsolationLines);
-                if (hasBackVCuts)     side2Content.push(...backVcutLines);
-                if (backDrillLines.length) side2Content.push(...backDrillLines);
-                gcSide2 = (hasBackIsolation || hasBackVCuts || backDrillLines.length)
-                    ? buildSectionFile('Side 2 — Back', side2Content)
-                    : '';
+                const frontDrillLines = [];
+                if (hasAlignPins) frontDrillLines.push(...alignPinLines);
+                if (drillLines.length) frontDrillLines.push(...drillLines);
+
+                gcodeTraces    = pushSeparateFile('Front Traces.nc',  'pcbmill-front-traces.nc',  'Front — Isolation Routing', isolationLines);
+                gcodeVCuts     = pushSeparateFile('Front VCuts.nc',   'pcbmill-front-vcuts.nc',   'Front — V-Cut Scoring', vcutLines);
+                gcodeDrill     = pushSeparateFile('Front Drill.nc',   'pcbmill-front-drill.nc',   'Front — Drilling', frontDrillLines);
+                gcodeDepanel   = pushSeparateFile('Front Depanel.nc', 'pcbmill-front-depanel.nc', 'Front — Depanelization', depanelLines);
+                gcodeOutline   = pushSeparateFile('Front Outline.nc', 'pcbmill-front-outline.nc', 'Front — Board Outline', edgeLines);
+                gcSide1        = pushSeparateFile('Back Traces.nc',   'pcbmill-back-traces.nc',   'Back — Isolation Routing', backIsolationLines);
+                gcodeVCutsBack = pushSeparateFile('Back VCuts.nc',    'pcbmill-back-vcuts.nc',    'Back — V-Cut Scoring', backVcutLines);
+                gcSide2        = pushSeparateFile('Back Drill.nc',    'pcbmill-back-drill.nc',    'Back — Drilling', backDrillLines);
+                pushSeparateFile('Back Outline.nc', 'pcbmill-back-outline.nc', 'Back — Board Outline', backEdgeLines);
             } else {
+                gcodeTraces    = pushSeparateFile('Traces.nc',    'pcbmill-traces.nc',     'Isolation Routing', isolationLines);
+                gcodeVCuts     = pushSeparateFile('VCuts.nc',     'pcbmill-vcuts.nc',      'V-Cut Scoring', vcutLines);
+                gcodeDrill     = pushSeparateFile('Drill.nc',     'pcbmill-drill.nc',      'Drilling', drillLines);
+                gcodeDepanel   = pushSeparateFile('Depanel.nc',   'pcbmill-depanel.nc',    'Depanelization', depanelLines);
+                gcodeOutline   = pushSeparateFile('Outline.nc',   'pcbmill-outline.nc',    'Board Outline', edgeLines);
+                gcodeVCutsBack = pushSeparateFile('VCutsBack.nc', 'pcbmill-vcuts-back.nc', 'V-Cut Scoring — Back Side', backVcutLines);
                 gcSide1 = gcSide2 = '';
             }
 
             // Textarea shows a combined preview so the user can review all content
             const preview = [];
-            let fileNum = 0;
-            if (twoLayerMode) {
-                const totalFiles = [gcSide1, gcSide2].filter(Boolean).length;
-                if (gcSide1) { preview.push(`; ====== FILE ${++fileNum} OF ${totalFiles}: SIDE 1 ======\n`); preview.push(gcSide1); }
-                if (gcSide2) { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: SIDE 2 ======\n`); preview.push(gcSide2); }
-            } else {
-                const totalFiles = [gcodeTraces, gcodeVCuts, gcodeVCutsBack, gcodeDrill, gcodeDepanel, gcodeOutline].filter(Boolean).length;
-                if (gcodeTraces)    { preview.push(`; ====== FILE ${++fileNum} OF ${totalFiles}: TRACES (Isolation Routing) ======\n`); preview.push(gcodeTraces); }
-                if (gcodeVCuts)     { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: V-CUTS (Front) ======\n`); preview.push(gcodeVCuts); }
-                if (gcodeVCutsBack) { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: V-CUTS (Back) ======\n`); preview.push(gcodeVCutsBack); }
-                if (gcodeDrill)     { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: DRILL ======\n`); preview.push(gcodeDrill); }
-                if (gcodeDepanel)   { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: DEPANELIZATION ======\n`); preview.push(gcodeDepanel); }
-                if (gcodeOutline)   { preview.push(`\n; ====== FILE ${++fileNum} OF ${totalFiles}: OUTLINE (Board Outline) ======\n`); preview.push(gcodeOutline); }
-            }
+            const totalFiles = separateExportFiles.length;
+            separateExportFiles.forEach((file, idx) => {
+                const spacer = idx === 0 ? '' : '\n';
+                preview.push(`${spacer}; ====== FILE ${idx + 1} OF ${totalFiles}: ${file.label.replace(/\.nc$/i, '').toUpperCase()} ======\n`);
+                preview.push(file.content);
+            });
             result = preview.join('\n');
         }
 
@@ -6000,14 +6113,7 @@ self.onmessage = function(e) {
         // Show the right download buttons for the selected mode
         const isCombined = modeCombined.checked;
         downloadBtn.classList.toggle('hidden', !isCombined || twoLayerMode);
-        downloadTracesBtn.classList.toggle('hidden',  isCombined || twoLayerMode || !gcodeTraces);
-        downloadDrillBtn.classList.toggle('hidden',   isCombined || twoLayerMode || !gcodeDrill);
-        downloadOutlineBtn.classList.toggle('hidden',  isCombined || twoLayerMode || !gcodeOutline);
-        downloadVCutsBtn.classList.toggle('hidden',     isCombined || twoLayerMode || !gcodeVCuts);
-        downloadVCutsBackBtn.classList.toggle('hidden', isCombined || twoLayerMode || !gcodeVCutsBack);
-        downloadDepanelBtn.classList.toggle('hidden',  isCombined || twoLayerMode || !gcodeDepanel);
-        downloadSide1Btn.classList.toggle('hidden', !twoLayerMode || !gcSide1);
-        downloadSide2Btn.classList.toggle('hidden', !twoLayerMode || !gcSide2);
+        renderSeparateDownloadButtons();
     });
 
     // Copy G-code (copies textarea content — combined text or full preview)
@@ -6040,9 +6146,13 @@ self.onmessage = function(e) {
 
     // Download G-code as .nc
     downloadBtn.addEventListener('click',        () => downloadNC(gcodeOutput.value, 'pcbmill.nc'));
-    downloadTracesBtn.addEventListener('click',  () => downloadNC(gcodeTraces,  'pcbmill-traces.nc'));
-    downloadDrillBtn.addEventListener('click',   () => downloadNC(gcodeDrill,   'pcbmill-drill.nc'));
-    downloadOutlineBtn.addEventListener('click', () => downloadNC(gcodeOutline, 'pcbmill-outline.nc'));
+    separateDownloadButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const idx = Number.parseInt(btn.dataset.exportIdx || '', 10);
+            if (!Number.isInteger(idx) || !separateExportFiles[idx]) return;
+            downloadNC(separateExportFiles[idx].content, separateExportFiles[idx].filename);
+        });
+    });
 
     // Copper layer drop zone
     copperDropZone.addEventListener('click', () => copperFileInput.click());
@@ -6113,6 +6223,7 @@ self.onmessage = function(e) {
         drawVcutXsection();
         updateRuntimeEstimate();
     });
+    edgeCutsOnBackSideEl?.addEventListener('change', () => updateRuntimeEstimate());
 
     // V-cut and depanel param changes → update runtime estimate
     ['vcutFeedRate', 'depanelAutoTabs'].forEach(id => {
@@ -6222,11 +6333,6 @@ self.onmessage = function(e) {
         drawPreview();
     });
 
-    // Download V-cuts and depanel G-code files
-    downloadVCutsBtn.addEventListener('click',     () => downloadNC(gcodeVCuts,     'pcbmill-vcuts.nc'));
-    downloadVCutsBackBtn.addEventListener('click', () => downloadNC(gcodeVCutsBack, 'pcbmill-vcuts-back.nc'));
-    downloadDepanelBtn.addEventListener('click', () => downloadNC(gcodeDepanel, 'pcbmill-depanel.nc'));
-
     // Two-layer toggle
     document.getElementById('twoLayerToggle').addEventListener('change', e => {
         twoLayerMode = e.target.checked;
@@ -6238,9 +6344,11 @@ self.onmessage = function(e) {
             disableAlignPinMode();
             previewSide = 'front';
             document.getElementById('sideViewFront').checked = true;
+            if (edgeCutsOnBackSideEl) edgeCutsOnBackSideEl.checked = false;
             renderAlignPinList();
         }
         refreshUiState();
+        updateRuntimeEstimate();
         drawPreview();
     });
 
@@ -6275,10 +6383,6 @@ self.onmessage = function(e) {
             }
         });
     });
-
-    // Side 1 / Side 2 downloads
-    downloadSide1Btn.addEventListener('click', () => downloadNC(gcSide1, 'pcbmill-side1.nc'));
-    downloadSide2Btn.addEventListener('click', () => downloadNC(gcSide2, 'pcbmill-side2.nc'));
 
     // Alignment pin diameter change → redraw (crosshair size updates)
     document.getElementById('alignPinDiam').addEventListener('input', () => {
@@ -6331,7 +6435,7 @@ self.onmessage = function(e) {
     [
         'safeZ', 'plungeRate', 'spindleRpm', 'spindleDelay',
         'drillDepth', 'drillFeedRate', 'feedRate', 'cutDepth', 'passDepth', 'tabWidth', 'tabLayers',
-        'isoFeedRate', 'isoDepth', 'drillOnBackSide'
+        'isoFeedRate', 'isoDepth', 'drillOnBackSide', 'edgeCutsOnBackSide'
     ].forEach(id => document.getElementById(id).addEventListener('input', updateRuntimeEstimate));
 
     // =========================================================
